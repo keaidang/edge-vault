@@ -187,7 +187,7 @@ async function deleteObjects(env, keys) {
 // ==================== 销毁流程 ====================
 // keepSessionToken：胁迫会话的 token——不删它，让胁迫者停留在假仓库里
 async function destroyAll(env, reason, keepSessionToken = null) {
-  for (const k of ['key:me', 'hash:checkin']) await state_kv.delete(k);
+  for (const k of ['key:me', 'hash:login', 'hash:checkin']) await state_kv.delete(k);
   let r2Deleted = 0;
   for (const prefix of ['vault/', 'notes/']) {
     const keys = await listAllObjects(env, prefix);
@@ -262,13 +262,14 @@ function fakeState() {
       const st = await getState();
       if (st.initialized && !st.destroyed) return err('已初始化，拒绝重复初始化', 403);
       const b = await body(request);
-      for (const f of ['wrapped_priv_key', 'salt', 'pub_key', 'checkin_hash', 'duress_hash', 'checkin_timeout_hours']) {
+      for (const f of ['wrapped_priv_key', 'salt', 'pub_key', 'login_hash', 'checkin_hash', 'duress_hash']) {
         if (b[f] === undefined) return err(`缺少字段 ${f}`);
       }
       await putState({
         initialized: true, destroyed: false, created_at: nowSec(), last_checkin: nowSec(),
         checkin_timeout_hours: Number(b.checkin_timeout_hours) || 72,
       });
+      await state_kv.put('hash:login', b.login_hash);
       await state_kv.put('hash:checkin', b.checkin_hash);
       await state_kv.put('hash:duress', b.duress_hash);
       await state_kv.put('key:me', JSON.stringify({ wrapped: b.wrapped_priv_key, salt: b.salt, pub: b.pub_key }));
@@ -292,7 +293,7 @@ function fakeState() {
       const checkinHash = await state_kv.get('hash:checkin');
       const duressHash = await state_kv.get('hash:duress');
       let duress = false;
-      if (checkinHash && timingSafeEq(hash, checkinHash)) duress = false;
+      if (checkinHash && timingSafeEq(hash, await state_kv.get('hash:login'))) duress = false;
       else if (duressHash && timingSafeEq(hash, duressHash)) duress = true;
       else { await audit(env, 'login_fail'); return err('口令错误', 401); }
       const { token, cookie } = await createSession(duress);
@@ -313,17 +314,24 @@ function fakeState() {
       return json({ ok: true, ...keyInfo });
     }
 
-    // ---------- 以下端点一律要求会话 ----------
+    // ---------- 以下端点要求会话（checkin 凭签到码公开访问） ----------
     const sess = await getSession(request);
     const duress = !!sess?.duress;
-    if (!sess && !['internal/sweep', 'internal/archive'].includes(path)) return err('未登录', 401);
+    if (!sess && !['checkin', 'internal/sweep', 'internal/archive'].includes(path)) return err('未登录', 401);
 
+    // 签到（公开端点，原版协议：凭签到码重置计时器，无需会话）
     if (path === 'checkin' && method === 'POST') {
-      if (duress) return json({ ok: true, last_checkin: nowSec() });
+      const b = await body(request);
+      const checkinHash = await state_kv.get('hash:checkin');
+      if (!checkinHash || !timingSafeEq(String(b.hash || ''), checkinHash)) {
+        await audit(env, 'checkin_fail');
+        return err('签到码错误', 401);
+      }
       const st = await getState();
       st.last_checkin = nowSec();
       await putState(st);
-      return json({ ok: true, last_checkin: st.last_checkin });
+      await audit(env, 'checkin');
+      return json({ ok: true, last_checkin: st.last_checkin, checkin_timeout_hours: st.checkin_timeout_hours || 72 });
     }
 
     if (path === 'logout' && method === 'POST') {
@@ -495,6 +503,14 @@ function fakeState() {
       const attId = randId();
       const r2Key = duress ? `decoy/att/${attId}` : `notes/att/${attId}`;
       return json({ ok: true, att_id: attId, upload_url: await presign(env, 'PUT', r2Key, 3600) });
+    }
+
+    if (path === 'notes/att/delete' && method === 'POST') {
+      const b = await body(request);
+      if (!b.att_id) return err('缺少 att_id');
+      const r2Key = `${duress ? 'decoy' : 'notes'}/att/${String(b.att_id).replace(/[^a-zA-Z0-9]/g, '')}`;
+      await deleteObjects(env, [r2Key]);
+      return json({ ok: true });
     }
 
     if (path.startsWith('notes/att/') && method === 'GET') {

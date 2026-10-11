@@ -1,38 +1,132 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Edge Vault · 神盾笔记</title>
-<link rel="stylesheet" href="/css/style.css">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EDGE VAULT |神盾笔记</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ctext x='50%25' y='54%25' text-anchor='middle' dominant-baseline='middle' font-size='48'%3E%F0%9F%9B%A1%EF%B8%8F%3C/text%3E%3C/svg%3E">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="/css/style.css">
 </head>
-<body>
-<header>
-  <h1>🛡️ 神盾笔记</h1>
-  <nav><a href="/">保险库</a><a href="/notes.html">神盾笔记</a><a href="/logs.html">审计日志</a>
-    <button id="btnLogout" class="ghost">登出</button></nav>
-</header>
-<main>
-  <section>
-    <div class="row">
-      <button id="btnNew">＋ 新建笔记</button>
-      <span class="hint">笔记正文与标题加密存于边缘 KV，图片附件加密存于 R2，均不占保险库配额</span>
-    </div>
-    <div id="editor" class="hidden">
-      <input id="noteTitle" placeholder="笔记标题（加密存储）" style="font-size:16px">
-      <textarea id="noteBody" rows="12" placeholder="笔记内容（加密存储）" style="width:100%;margin-top:10px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px;font-family:inherit"></textarea>
-      <div class="row">
-        <button id="btnSaveNote">保存</button>
-        <button id="btnCloseNote" class="ghost">关闭</button>
-        <span id="noteStatus" class="hint"></span>
-      </div>
-    </div>
-    <table id="noteTable">
-      <thead><tr><th>标题</th><th>更新时间</th><th>操作</th></tr></thead>
-      <tbody id="noteList"><tr><td colspan="3">加载中…</td></tr></tbody>
-    </table>
-  </section>
-</main>
-<script type="module" src="/js/notes.js"></script>
+<body class="auth-body">
+    <main class="shell pt-12 auth-shell">
+        <section class="panel neon-border rounded-[1.4rem] px-4 py-5 md:px-7 md:py-7 auth-frame">
+            <div class="flex flex-col gap-4 border-b border-cyan-900/60 pb-5 md:flex-row md:items-end md:justify-between">
+                <div class="space-y-2">
+                    <p class="section-title">Blackbox Protocol</p>
+                    <h1 class="orbitron text-2xl font-bold tracking-[0.28em] text-cyan-300 md:text-4xl">EDGE VAULT</h1>
+                    <p class="max-w-2xl text-sm leading-6 text-cyan-100/70 md:text-base">神盾笔记是基于RSA加密的安全便签。</p>
+                </div>
+                <div class="flex flex-wrap items-center gap-2">
+                    <span class="status-pill text-emerald-300">● 隧道运行中</span>
+                    <span id="idle-countdown" class="status-pill idle-pill">60s</span>
+                    <span class="status-pill">ADMIN</span>
+                </div>
+            </div>
+
+            <div id="page-content">
+                <!-- 未解锁：输入密码 -->
+                <div id="notes-gate" class="mx-auto mt-6 max-w-2xl">
+                    <div class="panel neon-border rounded-[1.25rem] px-5 py-6 md:px-7 md:py-8">
+                        <div class="space-y-4">
+                            <div class="text-center">
+                                <h2 class="orbitron mt-2 text-xl text-cyan-300 md:text-2xl">进入笔记</h2>
+                                <p class="mt-3 text-sm leading-6 text-cyan-100/65">输入系统密码进入神盾笔记。</p>
+                            </div>
+                            <div class="stack-form">
+                                <input type="text" id="notesPass" required autocomplete="off" placeholder="输入系统密码" class="field secure-entry">
+                                <button type="button" id="btnNotesUnlock" class="btn-neon orbitron w-full">进入笔记</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 已解锁：双栏 -->
+                <div id="notes-main" class="hidden mt-6 auth-layout">
+                    <aside class="panel neon-border rounded-[1.25rem] p-5 md:p-6 sidebar-panel">
+                        <div class="space-y-5 sidebar-scroll">
+                            <div class="metric">
+                                <div class="mt-2 orbitron text-xl text-cyan-300 md:text-2xl">EDGE NOTES</div>
+                                <p class="mt-3 text-sm leading-6 text-cyan-100/65">笔记正文加密存于边缘 KV，图片附件加密存于对象存储。</p>
+                            </div>
+
+                            <div class="nav-grid">
+                                <a href="/" class="nav-link">保险库</a>
+                                <a href="/notes.html" class="nav-link active">神盾笔记</a>
+                                <a href="/logs.html" class="nav-link">日志</a>
+                            </div>
+
+                            <button type="button" id="btnLogout" class="btn-muted orbitron w-full">断开会话</button>
+                        </div>
+                    </aside>
+
+                    <section class="panel neon-border rounded-[1.25rem] p-5 md:p-6 content-panel">
+                        <div class="flex flex-col gap-4 border-b border-cyan-900/60 pb-5 md:flex-row md:items-end md:justify-between">
+                            <div>
+                                <h2 class="mt-2 text-lg font-semibold text-cyan-200 md:text-xl">独立加密笔记区</h2>
+                            </div>
+                            <div class="text-sm leading-6 text-cyan-100/55">笔记在浏览器内加解密，服务端只经手密文。</div>
+                        </div>
+
+                        <div class="mt-5 notes-shell">
+                            <aside class="note-list-panel">
+                                <div class="space-y-4 content-scroll pr-1">
+                                    <button type="button" id="btnNewNote" class="btn-neon orbitron w-full">新建笔记</button>
+                                    <div id="notesEmpty" class="empty-state hidden">
+                                        <p class="orbitron text-base text-cyan-700">NO NOTES</p>
+                                        <p class="mt-2 text-sm">当前还没有笔记。</p>
+                                    </div>
+                                    <div id="noteList" class="space-y-4"></div>
+                                </div>
+                            </aside>
+
+                            <section class="note-editor-panel">
+                                <div class="content-scroll pr-1">
+                                    <div class="space-y-4">
+                                        <div class="stack-form">
+                                            <input type="text" id="noteTitle" maxlength="120" placeholder="笔记标题（加密存储）" class="field">
+                                            <textarea id="noteBody" placeholder="输入加密笔记内容" class="textarea-field" style="min-height:280px"></textarea>
+                                            <div class="inline-actions">
+                                                <button type="button" id="btnSaveNote" class="btn-neon orbitron">保存笔记</button>
+                                                <button type="button" id="btnDeleteNote" class="btn-danger">删除笔记</button>
+                                                <span id="noteStatus" class="text-sm text-cyan-100/60"></span>
+                                            </div>
+                                        </div>
+
+                                        <div class="space-y-4">
+                                            <div class="flex items-end justify-between gap-4">
+                                                <div>
+                                                    <p class="section-title">Attachments</p>
+                                                    <h3 class="mt-2 text-base font-semibold text-cyan-200">图片附件</h3>
+                                                </div>
+                                                <span id="attCount" class="status-pill">0</span>
+                                            </div>
+
+                                            <div class="grid gap-4 md:grid-cols-[1fr_auto]">
+                                                <input type="file" id="attInput" accept="image/*" class="file-field">
+                                                <button type="button" id="btnAttUpload" class="btn-neon">上传附件</button>
+                                            </div>
+
+                                            <div id="attEmpty" class="empty-state">当前没有附件。</div>
+                                            <div id="attList" class="attachment-grid"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </section>
+                        </div>
+                    </section>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="footer-meta">
+        <div>&copy; Edge Vault. Licensed under the Apache License 2.0</div>
+        <div>GitHub:
+            <a href="https://github.com/keaidang/edge-vault" target="_blank" rel="noopener noreferrer">keaidang</a></div>
+    </footer>
+
+    <script type="module" src="/js/crypto.js"></script>
+    <script type="module" src="/js/notes.js"></script>
 </body>
 </html>

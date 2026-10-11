@@ -27,9 +27,10 @@ async function pbkdf2(password, saltStr, info) {
   );
 }
 
-// 登录哈希（服务端只存此哈希；checkin 与 duress 用不同 info 区分）
+// 哈希派生（服务端只存哈希）：kind = 'login' | 'checkin' | 'duress'
+// 与原版 Aegis Vault 协议一致：主密码登录、签到码重置计时器、胁迫码触发销毁
 export async function loginHash(password, kind) {
-  const bits = await pbkdf2(password, 'edge-vault', kind === 'duress' ? 'duress' : 'checkin');
+  const bits = await pbkdf2(password, 'edge-vault', kind);
   return [...new Uint8Array(bits)].map(x => x.toString(16).padStart(2, '0')).join('');
 }
 

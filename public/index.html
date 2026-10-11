@@ -1,89 +1,191 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Edge Vault · 保险库</title>
-<link rel="stylesheet" href="/css/style.css">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EDGE VAULT |神盾保险库</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ctext x='50%25' y='54%25' text-anchor='middle' dominant-baseline='middle' font-size='48'%3E%F0%9F%9B%A1%EF%B8%8F%3C/text%3E%3C/svg%3E">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-<header>
-  <h1>🛡️ Edge Vault</h1>
-  <nav id="nav" class="hidden">
-    <a href="/">保险库</a><a href="/notes.html">神盾笔记</a><a href="/logs.html">审计日志</a>
-    <span id="quotaBadge" class="badge"></span>
-    <button id="btnSettings" class="ghost">⚙️ 存储设置</button>
-    <button id="btnLogout" class="ghost">登出</button>
-  </nav>
-</header>
+    <main class="shell pt-12">
+        <section class="panel neon-border rounded-[1.4rem] px-4 py-5 md:px-7 md:py-7">
+            <div class="flex flex-col gap-4 border-b border-cyan-900/60 pb-5 md:flex-row md:items-end md:justify-between">
+                <div class="space-y-2">
+                    <p class="section-title">Blackbox Protocol</p>
+                    <h1 class="orbitron text-2xl font-bold tracking-[0.28em] text-cyan-300 md:text-4xl">EDGE VAULT</h1>
+                    <p class="max-w-2xl text-sm leading-6 text-cyan-100/70 md:text-base">自托管加密保险库，开源 可控 便捷的选择</p>
+                </div>
+                <div class="flex flex-wrap items-center gap-2">
+                    <span id="status-pill" class="status-pill border-yellow-500/30 bg-yellow-500/10 text-yellow-200 hidden">● 待初始化</span>
+                    <span id="status-pill-running" class="status-pill text-emerald-300 hidden">● 隧道运行中</span>
+                    <span id="status-pill-destroyed" class="status-pill border-red-500/30 bg-red-500/10 text-red-300 hidden">● 系统已自毁</span>
+                    <span id="idle-countdown" class="status-pill idle-pill hidden">60s</span>
+                    <span id="user-pill" class="status-pill hidden">ADMIN</span>
+                </div>
+            </div>
 
-<main id="main">
-  <!-- 初始化向导 -->
-  <section id="view-init" class="hidden">
-    <h2>首次初始化</h2>
-    <p class="hint">密钥在浏览器生成，口令不会上传。请离线备份好以下信息后继续。</p>
-    <label>主口令<input type="password" id="initPass" autocomplete="new-password"></label>
-    <label>确认主口令<input type="password" id="initPass2"></label>
-    <label>胁迫口令（可选，输入后静默销毁）<input type="password" id="initDuress" autocomplete="new-password"></label>
-    <label>签到超时（小时，超时自动销毁，默认 72）<input type="number" id="initTimeout" value="72" min="1"></label>
-    <button id="btnInit">生成密钥并初始化</button>
-    <pre id="initProgress" class="log"></pre>
-  </section>
+            <div id="page-content">
+                <!-- 待初始化 -->
+                <div id="view-init" class="hidden mx-auto mt-6 max-w-2xl">
+                    <div class="panel neon-border rounded-[1.25rem] px-5 py-6 md:px-7 md:py-8">
+                        <div class="mb-6 space-y-2 text-center">
+                            <p class="section-title">Initialize</p>
+                            <h2 class="orbitron text-xl text-cyan-300 md:text-2xl">建立最高加密协议</h2>
+                            <p class="text-sm text-cyan-100/65">首次部署后创建管理员密钥和签到协议。</p>
+                        </div>
+                        <div class="stack-form">
+                            <input type="text" id="initPass" required minlength="10" autocomplete="off" placeholder="设置管理员总密码" class="field secure-entry">
+                            <input type="text" id="initPass2" required minlength="10" autocomplete="off" placeholder="再次输入管理员总密码" class="field secure-entry">
+                            <input type="text" id="initCheckin" required minlength="6" autocomplete="off" placeholder="设置签到确认码" class="field secure-entry">
+                            <input type="text" id="initDuress" autocomplete="off" placeholder="设置胁迫销毁码（可选，留空则不可用）" class="field secure-entry">
+                            <input type="number" id="initTimeout" value="72" min="1" placeholder="签到超时（小时，默认 72）" class="field">
+                            <button type="button" id="btnInit" class="btn-neon orbitron w-full">生成 RSA-3072 密钥对</button>
+                        </div>
+                        <pre id="initProgress" class="code-blockish mt-4 hidden"></pre>
+                    </div>
+                </div>
 
-  <!-- 登录 -->
-  <section id="view-login" class="hidden">
-    <h2>解锁保险库</h2>
-    <label>主口令 / 胁迫口令<input type="password" id="loginPass"></label>
-    <button id="btnLogin">解锁</button>
-    <p class="hint" id="loginHint"></p>
-  </section>
+                <!-- 已销毁 -->
+                <div id="view-destroyed" class="hidden mx-auto mt-6 max-w-2xl">
+                    <div class="panel danger-border rounded-[1.25rem] px-5 py-7 text-center md:px-8 md:py-10">
+                        <div class="space-y-3">
+                            <p class="section-title text-red-300/80">Failsafe</p>
+                            <h2 class="orbitron text-2xl text-red-300 md:text-3xl">系统已永久锁定</h2>
+                            <p class="mx-auto max-w-xl text-sm leading-7 text-red-100/70 md:text-base">私钥和加密数据已执行销毁流程。你可以重置系统重新初始化，但无法恢复已销毁内容。</p>
+                        </div>
+                        <button type="button" id="btnResetSystem" class="btn-neon orbitron w-full md:w-auto md:px-8 mt-8">重置系统并重新初始化</button>
+                    </div>
+                </div>
 
-  <!-- 已销毁 -->
-  <section id="view-destroyed" class="hidden">
-    <h2>⚠️ 系统已销毁</h2>
-    <p>数据已按策略自动清除。如需重新使用，请删除 KV 数据后重新初始化。</p>
-  </section>
+                <!-- 未登录：倒计时 + 登录 -->
+                <div id="view-login" class="hidden mt-6 panel-grid">
+                    <section class="panel neon-border rounded-[1.25rem] p-5 md:col-span-6 md:p-7">
+                        <div class="space-y-4">
+                            <div>
+                                <p class="section-title">Dead Man's Switch</p>
+                                <h2 class="mt-2 text-lg font-semibold text-cyan-200 md:text-xl">自毁倒计时</h2>
+                            </div>
+                            <div class="metric">
+                                <div id="countdown" class="countdown orbitron text-cyan-300">00:00:00</div>
+                                <p class="mt-3 text-sm leading-6 text-cyan-100/60">输入正确签到码后会立即重置计时器。</p>
+                            </div>
+                            <div class="stack-form">
+                                <input type="text" id="checkinCode" required autocomplete="off" placeholder="输入签到码重置计时器" class="field secure-entry">
+                                <button type="button" id="btnCheckin" class="btn-neon orbitron w-full">重置协议计时器</button>
+                            </div>
+                        </div>
+                    </section>
 
-  <!-- 超时 -->
-  <section id="view-overdue" class="hidden">
-    <h2>⏰ 签到已超时</h2>
-    <p>系统处于待销毁状态（自毁扫描每 5 分钟执行一次）。立即签到可阻止销毁。</p>
-    <button id="btnRescue">立即签到</button>
-  </section>
+                    <section class="panel neon-border rounded-[1.25rem] p-5 md:col-span-6 md:p-7">
+                        <div class="space-y-4">
+                            <div>
+                                <p class="section-title">Authentication</p>
+                                <h2 class="mt-2 text-lg font-semibold text-cyan-200 md:text-xl">进入系统</h2>
+                            </div>
+                            <div class="metric">
+                                <div class="orbitron text-2xl text-cyan-700 md:text-3xl">ENCRYPTION ACTIVE</div>
+                                <p class="mt-3 text-sm leading-6 text-cyan-100/60">请输入密码登录神盾系统</p>
+                            </div>
+                            <div class="stack-form">
+                                <input type="text" id="loginPass" required autocomplete="off" placeholder="输入系统密码" class="field secure-entry">
+                                <button type="button" id="btnLogin" class="btn-neon orbitron w-full">进入系统</button>
+                            </div>
+                        </div>
+                    </section>
+                </div>
 
-  <!-- 保险库主界面 -->
-  <section id="view-vault" class="hidden">
-    <div class="row">
-      <h2>文件</h2>
-      <input type="file" id="fileInput" multiple class="hidden">
-      <button id="btnUpload">⬆ 上传加密文件</button>
-      <span id="checkinBadge" class="badge"></span>
-    </div>
-    <div class="quota-bar"><div id="quotaFill"></div></div>
-    <div class="quota-text" id="quotaText"></div>
-    <table id="fileTable">
-      <thead><tr><th>文件名</th><th>大小</th><th>时间</th><th>操作</th></tr></thead>
-      <tbody id="fileList"><tr><td colspan="4">加载中…</td></tr></tbody>
-    </table>
-  </section>
+                <!-- 已登录：保险库 -->
+                <div id="view-vault" class="hidden mt-6 auth-layout">
+                    <aside class="panel neon-border rounded-[1.25rem] p-5 md:p-6 sidebar-panel">
+                        <div class="space-y-5 sidebar-scroll">
+                            <div class="metric">
+                                <p class="section-title">Session</p>
+                                <div class="mt-2 orbitron text-xl text-cyan-300 md:text-2xl">ADMIN</div>
+                                <p class="mt-3 text-sm leading-6 text-cyan-100/65">
+                                    当前通过服务端会话访问。
+                                    <br>系统容量: <span id="vaultSize">-- / --</span>
+                                </p>
+                            </div>
 
-  <!-- 存储设置 -->
-  <section id="view-settings" class="hidden">
-    <h2>存储设置</h2>
-    <label>保险库配额（GB）<input type="number" id="quotaGB" step="0.5" min="0.01"></label>
-    <p class="hint">笔记存储在边缘 KV，不占用此配额。</p>
-    <div class="quota-bar"><div id="quotaFill2"></div></div>
-    <div class="quota-text" id="quotaText2"></div>
-    <div class="row">
-      <button id="btnSaveQuota">保存配额</button>
-      <button id="btnDestroy" class="danger">🔥 立即销毁全部数据</button>
-    </div>
-    <p class="hint">销毁：先删密钥再删全部密文（R2 + KV），不可恢复，需二次确认。</p>
-    <button id="btnBack" class="ghost">← 返回</button>
-  </section>
-</main>
+                            <div class="nav-grid">
+                                <a href="/" class="nav-link active">保险库</a>
+                                <a href="/notes.html" class="nav-link">笔记</a>
+                                <a href="/logs.html" class="nav-link">日志</a>
+                            </div>
 
-<script type="module" src="/js/crypto.js"></script>
-<script type="module" src="/js/app.js"></script>
+                            <button type="button" id="btnLogout" class="btn-muted orbitron w-full">断开会话</button>
+
+                            <details class="admin-dropdown" id="admin-controls">
+                                <summary class="admin-toggle">
+                                    <div class="text-left">
+                                        <p class="section-title">Admin Controls</p>
+                                        <h3 class="mt-2 text-base font-semibold text-cyan-200">系统管理协议</h3>
+                                    </div>
+                                    <span class="admin-toggle-icon text-xl text-cyan-300">⌄</span>
+                                </summary>
+                                <div class="admin-content space-y-4">
+                                    <div class="dense-form">
+                                        <input type="number" id="quotaGB" step="0.5" min="0.01" placeholder="保险库配额（GB）" class="field">
+                                        <button type="button" id="btnSaveQuota" class="btn-neon w-full">保存存储配额</button>
+                                    </div>
+                                    <button type="button" id="btnDestroy" class="btn-danger w-full">立即销毁全部数据</button>
+                                    <a href="/logs.html" class="btn-ghost w-full">查看日志</a>
+                                </div>
+                            </details>
+                        </div>
+                    </aside>
+
+                    <section class="panel neon-border rounded-[1.25rem] p-5 md:p-6 content-panel">
+                        <div class="flex flex-col gap-4 border-b border-cyan-900/60 pb-5 md:flex-row md:items-end md:justify-between">
+                            <div>
+                                <p class="section-title">Vault Files</p>
+                                <h2 class="mt-2 text-lg font-semibold text-cyan-200 md:text-xl">加密文件</h2>
+                            </div>
+                            <div class="text-sm leading-6 text-cyan-100/55">文件在浏览器内加密后上传，服务端只经手密文。</div>
+                        </div>
+
+                        <div class="mt-5 content-scroll">
+                            <div id="filesEmpty" class="empty-state hidden">
+                                <p class="orbitron text-lg text-cyan-700">VAULT EMPTY</p>
+                                <p class="mt-2 text-sm">当前保险库中还没有文件。</p>
+                            </div>
+                            <div id="filesMobile" class="mobile-stack"></div>
+                            <table id="filesTable" class="desktop-table files-table mt-2 w-full text-left text-sm">
+                                <colgroup>
+                                    <col>
+                                    <col style="width: 440px;">
+                                </colgroup>
+                                <thead>
+                                    <tr class="border-b border-cyan-900/70 text-cyan-600">
+                                        <th class="pb-3 font-medium">文件名</th>
+                                        <th class="pb-3 text-right font-medium">操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="fileRows"></tbody>
+                            </table>
+                        </div>
+
+                        <div class="mt-6 stack-form border-t border-cyan-900/60 pt-5">
+                            <div class="grid gap-4 md:grid-cols-[1fr_auto]">
+                                <input type="file" id="fileInput" multiple class="file-field">
+                                <button type="button" id="btnUpload" class="btn-neon orbitron w-full md:min-w-[180px]">上传加密</button>
+                            </div>
+                        </div>
+                    </section>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="footer-meta">
+        <div>&copy; Edge Vault. Licensed under the Apache License 2.0</div>
+        <div>GitHub:
+            <a href="https://github.com/keaidang/edge-vault" target="_blank" rel="noopener noreferrer">keaidang</a></div>
+    </footer>
+
+    <script type="module" src="/js/crypto.js"></script>
+    <script type="module" src="/js/app.js"></script>
 </body>
 </html>
