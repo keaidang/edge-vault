@@ -1,15 +1,20 @@
-// Edge Vault — API 总路由（catch-all）
-// /api/* 全部在此分发。KV 为全局变量：state_kv / session_kv / audit_kv
-// 胁迫模式：胁迫口令登录 → 会话标记 duress → 所有数据操作重定向到 decoy/ 隔离空间
-//           真实数据在后台立即销毁（waitUntil），对胁迫者呈现"正常但空"的仓库
-import {
-  json, err, createSession, getSession, destroyAllSessions,
-  audit, readAudit, getState, putState, getStorageConfig, getUsage,
-  randId, nowSec, DEFAULT_QUOTA,
-} from '../_lib/util.js';
-import { presign, listAllObjects, deleteObjects } from '../_lib/r2.js';
+// Edge Vault — API 总路由（单文件版：工具函数全部内联，无跨文件导入）
+// KV 为控制台绑定的全局变量：state_kv / session_kv / audit_kv
+// 环境变量：R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / R2_BUCKET
+//          SESSION_SECRET / INTERNAL_TOKEN
+// 胁迫模式：胁迫口令登录 → duress 会话 → 数据操作重定向 decoy/ 隔离空间，真实数据后台立即销毁
 
-const CHECKIN_SALT = 'edge-vault-checkin'; // 预留
+const te = s => new TextEncoder().encode(s);
+const hex = buf => [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+const randId = () => crypto.randomUUID().replace(/-/g, '').slice(0, 16);
+const nowSec = () => Math.floor(Date.now() / 1000);
+const DEFAULT_QUOTA = 5 * 1024 * 1024 * 1024; // 保险库默认 5GB，可调
+const SESSION_TTL = 12 * 3600;
+
+function json(data, status = 200, headers = {}) {
+  return new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', ...headers } });
+}
+const err = (msg, status = 400) => json({ ok: false, error: msg }, status);
 
 function timingSafeEq(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false;
@@ -26,7 +31,185 @@ function internalAuthOk(request, env) {
   return timingSafeEq(request.headers.get('x-internal-token') || '', env.INTERNAL_TOKEN || '');
 }
 
-// 对胁迫者呈现的"假状态"——一切正常、刚签到、空仓库
+// ==================== 会话 ====================
+function parseCookie(request) {
+  const out = {};
+  for (const pair of (request.headers.get('Cookie') || '').split(/;\s*/)) {
+    const i = pair.indexOf('=');
+    if (i > 0) out[pair.slice(0, i)] = pair.slice(i + 1);
+  }
+  return out;
+}
+
+async function createSession(duress = false) {
+  const token = crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '');
+  const now = nowSec();
+  await session_kv.put(`sess:${token}`, JSON.stringify({ duress, iat: now, exp: now + SESSION_TTL }));
+  return { token, cookie: `ev_session=${token}; Max-Age=${SESSION_TTL}; Path=/; Secure; HttpOnly; SameSite=Strict` };
+}
+
+async function getSession(request) {
+  const token = parseCookie(request).ev_session;
+  if (!token) return null;
+  const sess = await session_kv.get(`sess:${token}`, 'json');
+  if (!sess || sess.exp < nowSec()) return null;
+  return sess;
+}
+
+// ==================== 审计日志（链式哈希） ====================
+async function hmacHex(secret, msg) {
+  const key = await crypto.subtle.importKey('raw', te(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  return hex(await crypto.subtle.sign('HMAC', key, te(msg)));
+}
+
+async function audit(env, action, detail = '') {
+  const seq = Number((await audit_kv.get('audit:counter')) || 0) + 1;
+  const ts = new Date().toISOString();
+  const prev = (await audit_kv.get('audit:prev')) || 'GENESIS';
+  const hash = await hmacHex(env.SESSION_SECRET, `${seq}|${ts}|${action}|${detail}|${prev}`);
+  await audit_kv.put(`audit:${seq}`, JSON.stringify({ seq, ts, action, detail, prev, hash }));
+  await audit_kv.put('audit:counter', String(seq));
+  await audit_kv.put('audit:prev', hash);
+}
+
+async function readAudit(limit = 200) {
+  const counter = Number((await audit_kv.get('audit:counter')) || 0);
+  const entries = [];
+  for (let i = counter; i >= Math.max(1, counter - limit + 1); i--) {
+    const e = await audit_kv.get(`audit:${i}`, 'json');
+    if (e) entries.push(e);
+  }
+  return { counter, entries };
+}
+
+// ==================== 系统状态 ====================
+async function getState() { return (await state_kv.get('state:system', 'json')) || { initialized: false }; }
+async function putState(s) { await state_kv.put('state:system', JSON.stringify(s)); }
+async function getStorageConfig() { return (await state_kv.get('config:storage', 'json')) || { vault_quota_bytes: DEFAULT_QUOTA, notes_excluded: true }; }
+async function getUsage() { return (await state_kv.get('usage:vault', 'json')) || { used_bytes: 0 }; }
+
+// ==================== R2 (S3 兼容) SigV4 ====================
+async function hmacR2(keyBuf, msg) {
+  const key = await crypto.subtle.importKey('raw', keyBuf, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  return crypto.subtle.sign('HMAC', key, te(msg));
+}
+async function sha256HexR2(data) {
+  const buf = typeof data === 'string' ? te(data) : data;
+  return hex(await crypto.subtle.digest('SHA-256', buf));
+}
+async function r2SigningKey(secret, dateStamp) {
+  const kDate = await hmacR2(te(`AWS4${secret}`), dateStamp);
+  return hmacR2(await hmacR2(await hmacR2(kDate, 'auto'), 's3'), 'aws4_request');
+}
+function r2Cfg(env) {
+  return {
+    host: `${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+    bucket: env.R2_BUCKET,
+    accessKey: env.R2_ACCESS_KEY_ID,
+    secret: env.R2_SECRET_ACCESS_KEY,
+  };
+}
+function amzDates() {
+  const amzDate = new Date().toISOString().replace(/[:-]|\.\d{3}/g, '');
+  return { amzDate, dateStamp: amzDate.slice(0, 8) };
+}
+
+// 服务端签名请求（ListObjectsV2 / DeleteObjects）
+async function s3Request(env, method, path, params = {}, bodyStr = '') {
+  const { host, bucket, accessKey, secret } = r2Cfg(env);
+  const { amzDate, dateStamp } = amzDates();
+  const fullPath = `/${bucket}${path}`;
+  const query = Object.keys(params).sort()
+    .map(k => `${encodeURIComponent(k)}=${encodeURIComponent(params[k])}`).join('&');
+  const payloadHash = await sha256HexR2(bodyStr);
+  const headers = { host, 'x-amz-content-sha256': payloadHash, 'x-amz-date': amzDate };
+  const hNames = Object.keys(headers).sort();
+  const signedHeaders = hNames.join(';');
+  const canonical = [method, fullPath, query, hNames.map(h => `${h}:${headers[h]}`).join('\n') + '\n', signedHeaders, payloadHash].join('\n');
+  const scope = `${dateStamp}/auto/s3/aws4_request`;
+  const sts = ['AWS4-HMAC-SHA256', amzDate, scope, await sha256HexR2(canonical)].join('\n');
+  const sig = hex(await hmacR2(await r2SigningKey(secret, dateStamp), sts));
+  const auth = `AWS4-HMAC-SHA256 Credential=${accessKey}/${scope}, SignedHeaders=${signedHeaders}, Signature=${sig}`;
+  return fetch(`https://${host}${fullPath}${query ? `?${query}` : ''}`, {
+    method, headers: { ...headers, Authorization: auth }, body: bodyStr || undefined,
+  });
+}
+
+// 预签名 URL（浏览器直传/直下）
+async function presign(env, method, objectKey, expires = 3600) {
+  const { host, bucket, accessKey, secret } = r2Cfg(env);
+  const { amzDate, dateStamp } = amzDates();
+  const fullPath = `/${bucket}/${objectKey}`;
+  const scope = `${dateStamp}/auto/s3/aws4_request`;
+  const qp = new URLSearchParams({
+    'X-Amz-Algorithm': 'AWS4-HMAC-SHA256',
+    'X-Amz-Credential': `${accessKey}/${scope}`,
+    'X-Amz-Date': amzDate,
+    'X-Amz-Expires': String(expires),
+    'X-Amz-SignedHeaders': 'host',
+  });
+  const canonical = [method, fullPath, qp.toString(), `host:${host}\n`, 'host', 'UNSIGNED-PAYLOAD'].join('\n');
+  const sts = ['AWS4-HMAC-SHA256', amzDate, scope, await sha256HexR2(canonical)].join('\n');
+  const sig = hex(await hmacR2(await r2SigningKey(secret, dateStamp), sts));
+  qp.set('X-Amz-Signature', sig);
+  return `https://${host}${fullPath}?${qp}`;
+}
+
+// 列出前缀下全部对象（自毁扫描用）
+async function listAllObjects(env, prefix) {
+  const keys = [];
+  let token = '';
+  do {
+    const params = { 'list-type': '2', prefix, 'max-keys': '1000' };
+    if (token) params['continuation-token'] = token;
+    const res = await s3Request(env, 'GET', '', params);
+    if (!res.ok) throw new Error(`ListObjects failed: ${res.status}`);
+    const xml = await res.text();
+    for (const m of xml.matchAll(/<Key>([^<]+)<\/Key>/g)) keys.push(m[1]);
+    token = /<NextContinuationToken>([^<]+)<\/NextContinuationToken>/.exec(xml)?.[1] || '';
+  } while (token);
+  return keys;
+}
+
+// 批量删除（每次最多 1000 个）
+async function deleteObjects(env, keys) {
+  let deleted = 0;
+  for (let i = 0; i < keys.length; i += 1000) {
+    const batch = keys.slice(i, i + 1000);
+    const bodyStr = `<Delete><Quiet>true</Quiet>${batch.map(k => `<Object><Key>${k}</Key></Object>`).join('')}</Delete>`;
+    const res = await s3Request(env, 'POST', '', { delete: '' }, bodyStr);
+    if (!res.ok) throw new Error(`DeleteObjects failed: ${res.status}`);
+    deleted += batch.length;
+  }
+  return deleted;
+}
+
+// ==================== 销毁流程 ====================
+// keepSessionToken：胁迫会话的 token——不删它，让胁迫者停留在假仓库里
+async function destroyAll(env, reason, keepSessionToken = null) {
+  for (const k of ['key:me', 'hash:checkin']) await state_kv.delete(k);
+  let r2Deleted = 0;
+  for (const prefix of ['vault/', 'notes/']) {
+    const keys = await listAllObjects(env, prefix);
+    if (keys.length) r2Deleted += await deleteObjects(env, keys);
+  }
+  for (const [kv, prefix] of [[state_kv, 'file:'], [state_kv, 'note:'], [state_kv, 'notes-index']]) {
+    const res = await kv.list({ prefix });
+    for (const k of res.keys) await kv.delete(k.name);
+  }
+  const res = await session_kv.list({ prefix: 'sess:' });
+  for (const k of res.keys) {
+    if (keepSessionToken && k.name === `sess:${keepSessionToken}`) continue;
+    await session_kv.delete(k.name);
+  }
+  await state_kv.delete('usage:vault');
+  const st = await getState();
+  await putState({ ...st, destroyed: true, destroyed_at: new Date().toISOString(), destroy_reason: reason });
+  await audit(env, 'destroy', `${reason} r2_deleted=${r2Deleted}`);
+  return r2Deleted;
+}
+
+// 对胁迫者呈现的"假状态"
 function fakeState() {
   return {
     ok: true, initialized: true, destroyed: false,
@@ -36,36 +219,7 @@ function fakeState() {
   };
 }
 
-// ---- 销毁流程：先删钥，后删密文 ----
-// keepSessionToken：胁迫会话的 token——不删它，让胁迫者停留在假仓库里
-async function destroyAll(env, reason, keepSessionToken = null) {
-  // 1) 删密钥材料（密文立即变废料）；保留 hash:duress 以维持假仓库可复登
-  for (const k of ['key:me', 'hash:checkin']) await state_kv.delete(k);
-  // 2) 删 R2 真实密文（vault/ 与 notes/ 前缀，不动 decoy/）
-  let r2Deleted = 0;
-  for (const prefix of ['vault/', 'notes/']) {
-    const keys = await listAllObjects(env, prefix);
-    if (keys.length) r2Deleted += await deleteObjects(env, keys);
-  }
-  // 3) 清 KV（真实文件元数据、笔记、用量）
-  for (const [kv, prefix] of [[state_kv, 'file:'], [state_kv, 'note:'], [state_kv, 'notes-index']]) {
-    const res = await kv.list({ prefix });
-    for (const k of res.keys) await kv.delete(k.name);
-  }
-  // 4) 删除其余会话（保留当前胁迫会话）
-  const res = await session_kv.list({ prefix: 'sess:' });
-  for (const k of res.keys) {
-    if (keepSessionToken && k.name === `sess:${keepSessionToken}`) continue;
-    await session_kv.delete(k.name);
-  }
-  await state_kv.delete('usage:vault');
-  // 5) 墓碑（对胁迫者不可见：匿名/胁迫会话的 state 端点返回假状态）
-  const st = await getState();
-  await putState({ ...st, destroyed: true, destroyed_at: new Date().toISOString(), destroy_reason: reason });
-  await audit(env, 'destroy', `${reason} r2_deleted=${r2Deleted}`);
-  return r2Deleted;
-}
-
+// ==================== 路由 ====================
 export async function onRequest(context) {
   const { request, env, waitUntil } = context;
   const url = new URL(request.url);
@@ -73,28 +227,18 @@ export async function onRequest(context) {
   const method = request.method;
 
   try {
-    // ---------- 无需会话 ----------
     if (path === 'state' && method === 'GET') {
       const sess = await getSession(request);
       const st = await getState();
+      if ((sess?.duress) || (!sess && st.initialized && st.destroyed)) return json(fakeState());
       const cfg = await getStorageConfig();
       const usage = await getUsage();
-      // 胁迫会话 / 匿名访问：销毁状态不可见（胁迫者先看到登录页，登录后进假仓库）
-      if ((sess?.duress) || (!sess && st.initialized && st.destroyed)) {
-        return json(st.initialized && st.destroyed ? fakeState() : { ...fakeState() });
-      }
-      // overdue 仅对真实会话暴露（匿名不泄露"待销毁"状态）
       const overdue = !!sess && st.initialized && !st.destroyed && st.last_checkin > 0 &&
         (nowSec() - st.last_checkin > (st.checkin_timeout_hours || 72) * 3600);
       return json({
-        ok: true,
-        initialized: !!st.initialized,
-        destroyed: !!st.destroyed,
-        overdue,
-        last_checkin: st.last_checkin || 0,
-        checkin_timeout_hours: st.checkin_timeout_hours || 72,
-        quota: cfg,
-        usage,
+        ok: true, initialized: !!st.initialized, destroyed: !!st.destroyed, overdue,
+        last_checkin: st.last_checkin || 0, checkin_timeout_hours: st.checkin_timeout_hours || 72,
+        quota: cfg, usage,
       });
     }
 
@@ -106,16 +250,15 @@ export async function onRequest(context) {
         if (b[f] === undefined) return err(`缺少字段 ${f}`);
       }
       await putState({
-        initialized: true,
-        destroyed: false,
-        created_at: nowSec(),
-        last_checkin: nowSec(),
+        initialized: true, destroyed: false, created_at: nowSec(), last_checkin: nowSec(),
         checkin_timeout_hours: Number(b.checkin_timeout_hours) || 72,
       });
       await state_kv.put('hash:checkin', b.checkin_hash);
       await state_kv.put('hash:duress', b.duress_hash);
       await state_kv.put('key:me', JSON.stringify({ wrapped: b.wrapped_priv_key, salt: b.salt, pub: b.pub_key }));
-      if (!(await state_kv.get('config:storage'))) await state_kv.put('config:storage', JSON.stringify({ vault_quota_bytes: 5368709120, notes_excluded: true }));
+      if (!(await state_kv.get('config:storage'))) {
+        await state_kv.put('config:storage', JSON.stringify({ vault_quota_bytes: DEFAULT_QUOTA, notes_excluded: true }));
+      }
       await audit(env, 'init', 'system initialized');
       return json({ ok: true });
     }
@@ -129,18 +272,13 @@ export async function onRequest(context) {
       const duressHash = await state_kv.get('hash:duress');
       let duress = false;
       if (checkinHash && timingSafeEq(hash, checkinHash)) duress = false;
-      else if (duressHash && timingSafeEq(hash, duressHash)) duress = true; // 胁迫码
-      else {
-        await audit(env, 'login_fail');
-        return err('口令错误', 401);
-      }
+      else if (duressHash && timingSafeEq(hash, duressHash)) duress = true;
+      else { await audit(env, 'login_fail'); return err('口令错误', 401); }
       const { token, cookie } = await createSession(duress);
       if (duress) {
-        // 胁迫登录：响应"正常"，真实数据在后台立即销毁（本请求内完成大部分删除）
         waitUntil(destroyAll(env, 'duress', token).catch(() => {}));
         return json({ ok: true, mode: 'decoy' }, 200, { 'Set-Cookie': cookie });
       }
-      // 系统已销毁后真实口令已删，自然到不了这里
       await audit(env, 'login', 'normal');
       return json({ ok: true, mode: 'real' }, 200, { 'Set-Cookie': cookie });
     }
@@ -154,16 +292,13 @@ export async function onRequest(context) {
       return json({ ok: true, ...keyInfo });
     }
 
-    // ---------- 需要会话 ----------
+    // ---------- 以下端点一律要求会话 ----------
     const sess = await getSession(request);
-    if (!sess && !['state', 'init', 'login'].includes(path)) {
-      // 其余端点一律要求会话
-      if (path !== 'internal/sweep' && path !== 'internal/archive') return err('未登录', 401);
-    }
     const duress = !!sess?.duress;
+    if (!sess && !['internal/sweep', 'internal/archive'].includes(path)) return err('未登录', 401);
 
     if (path === 'checkin' && method === 'POST') {
-      if (duress) return json({ ok: true, last_checkin: nowSec() }); // 假签到
+      if (duress) return json({ ok: true, last_checkin: nowSec() });
       const st = await getState();
       st.last_checkin = nowSec();
       await putState(st);
@@ -176,7 +311,6 @@ export async function onRequest(context) {
       return json({ ok: true });
     }
 
-    // 存储配额（设置菜单）
     if (path === 'config/storage') {
       if (method === 'GET') {
         if (duress) {
@@ -188,7 +322,7 @@ export async function onRequest(context) {
         return json({ ok: true, ...(await getStorageConfig()), usage: await getUsage() });
       }
       if (method === 'POST') {
-        if (duress) return json({ ok: true }); // 假保存
+        if (duress) return json({ ok: true });
         const b = await body(request);
         const q = Number(b.vault_quota_bytes);
         if (!Number.isFinite(q) || q < 1024 * 1024 || q > 1024 * 1024 * 1024 * 1024) return err('配额值无效');
@@ -198,7 +332,6 @@ export async function onRequest(context) {
       }
     }
 
-    // 文件：登记元数据 + 预签名上传（真实→vault/，胁迫→decoy/ 隔离空间）
     if (path === 'upload/meta' && method === 'POST') {
       const b = await body(request);
       const size = Number(b.size);
@@ -213,12 +346,10 @@ export async function onRequest(context) {
       if (usage.used_bytes + size > cfg.vault_quota_bytes) {
         return err(`超出保险库配额：已用 ${usage.used_bytes}/${cfg.vault_quota_bytes} 字节`, 403);
       }
-      const meta = {
-        id, size, r2_key: `vault/${id}.aes`,
-        name_enc: b.name_enc, wrapped_key: b.wrapped_key,
+      await state_kv.put(`file:${id}`, JSON.stringify({
+        id, size, r2_key: `vault/${id}.aes`, name_enc: b.name_enc, wrapped_key: b.wrapped_key,
         created: nowSec(), status: 'uploading',
-      };
-      await state_kv.put(`file:${id}`, JSON.stringify(meta));
+      }));
       return json({ ok: true, id, upload_url: await presign(env, 'PUT', `vault/${id}.aes`, 3600) });
     }
 
@@ -270,11 +401,8 @@ export async function onRequest(context) {
       const meta = await state_kv.get(`file:${id}`, 'json');
       if (!meta || meta.status !== 'ready') return err('文件不存在', 404);
       return json({
-        ok: true,
-        url: await presign(env, 'GET', meta.r2_key, 1800),
-        name_enc: meta.name_enc,
-        wrapped_key: meta.wrapped_key,
-        size: meta.size,
+        ok: true, url: await presign(env, 'GET', meta.r2_key, 1800),
+        name_enc: meta.name_enc, wrapped_key: meta.wrapped_key, size: meta.size,
       });
     }
 
@@ -294,10 +422,9 @@ export async function onRequest(context) {
       return json({ ok: true });
     }
 
-    // ---------- 笔记（真实→KV note:，胁迫→decoy:note:）----------
+    // ---------- 笔记 ----------
     if (path === 'notes/list' && method === 'GET') {
-      const prefix = duress ? 'decoy:notes-index' : 'notes-index';
-      const index = (await state_kv.get(prefix, 'json')) || [];
+      const index = (await state_kv.get(duress ? 'decoy:notes-index' : 'notes-index', 'json')) || [];
       return json({ ok: true, notes: index, decoy: duress });
     }
 
@@ -343,7 +470,6 @@ export async function onRequest(context) {
       return json({ ok: true });
     }
 
-    // 笔记附件：走 R2 预签名（不占保险库配额）
     if (path === 'notes/att/meta' && method === 'POST') {
       const attId = randId();
       const r2Key = duress ? `decoy/att/${attId}` : `notes/att/${attId}`;
@@ -356,15 +482,13 @@ export async function onRequest(context) {
       return json({ ok: true, url: await presign(env, 'GET', r2Key, 1800) });
     }
 
-    // ---------- 审计 ----------
     if (path === 'logs' && method === 'GET') {
-      if (duress) return json({ ok: true, counter: 0, entries: [] }); // 假日志
+      if (duress) return json({ ok: true, counter: 0, entries: [] });
       return json({ ok: true, ...(await readAudit(300)) });
     }
 
-    // ---------- 手动销毁 ----------
     if (path === 'destroy' && method === 'POST') {
-      if (duress) return json({ ok: true, deleted_r2_objects: 0 }); // 假销毁
+      if (duress) return json({ ok: true, deleted_r2_objects: 0 });
       const deleted = await destroyAll(env, 'manual');
       return json({ ok: true, deleted_r2_objects: deleted });
     }
@@ -374,8 +498,7 @@ export async function onRequest(context) {
       if (!internalAuthOk(request, env)) return err('forbidden', 403);
       const st = await getState();
       if (!st.initialized || st.destroyed) return json({ ok: true, skipped: 'not-active' });
-      const timeoutH = st.checkin_timeout_hours || 72;
-      const overdue = nowSec() - st.last_checkin > timeoutH * 3600;
+      const overdue = nowSec() - st.last_checkin > (st.checkin_timeout_hours || 72) * 3600;
       if (!overdue) return json({ ok: true, skipped: 'in-time', last_checkin: st.last_checkin });
       const deleted = await destroyAll(env, 'checkin-timeout');
       return json({ ok: true, destroyed: true, deleted_r2_objects: deleted });
