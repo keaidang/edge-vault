@@ -1,4 +1,6 @@
 {
+  "buildCommand": "",
+  "outputDirectory": "public",
   "schedules": [
     {
       "name": "self-destruct-sweep",
