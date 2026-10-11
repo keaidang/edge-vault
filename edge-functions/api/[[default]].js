@@ -260,7 +260,18 @@ function fakeState() {
 
     if (path === 'init' && method === 'POST') {
       const st = await getState();
-      if (st.initialized && !st.destroyed) return err('已初始化，拒绝重复初始化', 403);
+      // ⚠️ 临时开放重置（用户忘记密码，保险库为空）——重置完成后必须恢复下行注释
+      // if (st.initialized && !st.destroyed) return err('已初始化，拒绝重复初始化', 403);
+      if (st.initialized) {
+        for (const p of ['file:', 'note:']) {
+          const r = await state_kv.list({ prefix: p });
+          for (const k of r.keys) await state_kv.delete(k.name);
+        }
+        await state_kv.delete('notes-index');
+        await state_kv.delete('usage:vault');
+        await state_kv.delete('key:me');
+        for (const hk of ['hash:login', 'hash:checkin', 'hash:duress']) await state_kv.delete(hk);
+      }
       const b = await body(request);
       for (const f of ['wrapped_priv_key', 'salt', 'pub_key', 'login_hash', 'checkin_hash', 'duress_hash']) {
         if (b[f] === undefined) return err(`缺少字段 ${f}`);
