@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Edge Vault · 神盾笔记</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<header>
+  <h1>🛡️ 神盾笔记</h1>
+  <nav><a href="/">保险库</a><a href="/notes.html">神盾笔记</a><a href="/logs.html">审计日志</a>
+    <button id="btnLogout" class="ghost">登出</button></nav>
+</header>
+<main>
+  <section>
+    <div class="row">
+      <button id="btnNew">＋ 新建笔记</button>
+      <span class="hint">笔记正文与标题加密存于边缘 KV，图片附件加密存于 R2，均不占保险库配额</span>
+    </div>
+    <div id="editor" class="hidden">
+      <input id="noteTitle" placeholder="笔记标题（加密存储）" style="font-size:16px">
+      <textarea id="noteBody" rows="12" placeholder="笔记内容（加密存储）" style="width:100%;margin-top:10px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px;font-family:inherit"></textarea>
+      <div class="row">
+        <button id="btnSaveNote">保存</button>
+        <button id="btnCloseNote" class="ghost">关闭</button>
+        <span id="noteStatus" class="hint"></span>
+      </div>
+    </div>
+    <table id="noteTable">
+      <thead><tr><th>标题</th><th>更新时间</th><th>操作</th></tr></thead>
+      <tbody id="noteList"><tr><td colspan="3">加载中…</td></tr></tbody>
+    </table>
+  </section>
+</main>
+<script type="module" src="/js/notes.js"></script>
+</body>
+</html>

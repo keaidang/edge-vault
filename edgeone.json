@@ -1,0 +1,18 @@
+{
+  "schedules": [
+    {
+      "name": "self-destruct-sweep",
+      "cron": "*/5 * * * *",
+      "timezone": "Asia/Shanghai",
+      "method": "POST",
+      "path": "/api/internal/sweep"
+    },
+    {
+      "name": "audit-archive",
+      "cron": "30 3 * * *",
+      "timezone": "Asia/Shanghai",
+      "method": "POST",
+      "path": "/api/internal/archive"
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+:root {
+  --bg: #0d1117; --panel: #161b22; --border: #30363d;
+  --text: #e6edf3; --muted: #8b949e; --accent: #4f8ff7; --danger: #f85149; --ok: #3fb950;
+}
+* { box-sizing: border-box; margin: 0; }
+body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif; min-height: 100vh; }
+header { display: flex; align-items: center; justify-content: space-between; padding: 12px 24px; border-bottom: 1px solid var(--border); }
+header h1 { font-size: 18px; }
+nav { display: flex; gap: 12px; align-items: center; }
+nav a { color: var(--text); text-decoration: none; padding: 6px 10px; border-radius: 6px; }
+nav a:hover { background: var(--panel); }
+main { max-width: 860px; margin: 40px auto; padding: 0 16px; }
+section { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 24px; }
+h2 { margin-bottom: 16px; font-size: 18px; }
+label { display: block; margin: 12px 0; font-size: 14px; color: var(--muted); }
+input { display: block; width: 100%; margin-top: 6px; padding: 10px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; font-size: 14px; }
+button { padding: 9px 16px; background: var(--accent); color: #fff; border: 0; border-radius: 6px; cursor: pointer; font-size: 14px; margin: 8px 8px 0 0; }
+button:hover { filter: brightness(1.1); }
+button.ghost { background: transparent; border: 1px solid var(--border); color: var(--text); }
+button.danger { background: var(--danger); }
+.hidden { display: none !important; }
+.hint { color: var(--muted); font-size: 13px; margin-top: 10px; }
+.badge { font-size: 12px; color: var(--muted); border: 1px solid var(--border); padding: 4px 8px; border-radius: 12px; }
+.row { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+.quota-bar { height: 8px; background: var(--bg); border-radius: 4px; overflow: hidden; margin: 14px 0 6px; }
+.quota-bar > div { height: 100%; background: var(--accent); transition: width .3s; }
+.quota-text { font-size: 12px; color: var(--muted); margin-bottom: 14px; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--border); }
+th { color: var(--muted); font-weight: 500; }
+.log { background: var(--bg); padding: 12px; border-radius: 6px; font-size: 12px; white-space: pre-wrap; margin-top: 12px; min-height: 40px; }

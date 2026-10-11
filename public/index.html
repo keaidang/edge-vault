@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Edge Vault · 保险库</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<header>
+  <h1>🛡️ Edge Vault</h1>
+  <nav id="nav" class="hidden">
+    <a href="/">保险库</a><a href="/notes.html">神盾笔记</a><a href="/logs.html">审计日志</a>
+    <span id="quotaBadge" class="badge"></span>
+    <button id="btnSettings" class="ghost">⚙️ 存储设置</button>
+    <button id="btnLogout" class="ghost">登出</button>
+  </nav>
+</header>
+
+<main id="main">
+  <!-- 初始化向导 -->
+  <section id="view-init" class="hidden">
+    <h2>首次初始化</h2>
+    <p class="hint">密钥在浏览器生成，口令不会上传。请离线备份好以下信息后继续。</p>
+    <label>主口令<input type="password" id="initPass" autocomplete="new-password"></label>
+    <label>确认主口令<input type="password" id="initPass2"></label>
+    <label>胁迫口令（可选，输入后静默销毁）<input type="password" id="initDuress" autocomplete="new-password"></label>
+    <label>签到超时（小时，超时自动销毁，默认 72）<input type="number" id="initTimeout" value="72" min="1"></label>
+    <button id="btnInit">生成密钥并初始化</button>
+    <pre id="initProgress" class="log"></pre>
+  </section>
+
+  <!-- 登录 -->
+  <section id="view-login" class="hidden">
+    <h2>解锁保险库</h2>
+    <label>主口令 / 胁迫口令<input type="password" id="loginPass"></label>
+    <button id="btnLogin">解锁</button>
+    <p class="hint" id="loginHint"></p>
+  </section>
+
+  <!-- 已销毁 -->
+  <section id="view-destroyed" class="hidden">
+    <h2>⚠️ 系统已销毁</h2>
+    <p>数据已按策略自动清除。如需重新使用，请删除 KV 数据后重新初始化。</p>
+  </section>
+
+  <!-- 超时 -->
+  <section id="view-overdue" class="hidden">
+    <h2>⏰ 签到已超时</h2>
+    <p>系统处于待销毁状态（自毁扫描每 5 分钟执行一次）。立即签到可阻止销毁。</p>
+    <button id="btnRescue">立即签到</button>
+  </section>
+
+  <!-- 保险库主界面 -->
+  <section id="view-vault" class="hidden">
+    <div class="row">
+      <h2>文件</h2>
+      <input type="file" id="fileInput" multiple class="hidden">
+      <button id="btnUpload">⬆ 上传加密文件</button>
+      <span id="checkinBadge" class="badge"></span>
+    </div>
+    <div class="quota-bar"><div id="quotaFill"></div></div>
+    <div class="quota-text" id="quotaText"></div>
+    <table id="fileTable">
+      <thead><tr><th>文件名</th><th>大小</th><th>时间</th><th>操作</th></tr></thead>
+      <tbody id="fileList"><tr><td colspan="4">加载中…</td></tr></tbody>
+    </table>
+  </section>
+
+  <!-- 存储设置 -->
+  <section id="view-settings" class="hidden">
+    <h2>存储设置</h2>
+    <label>保险库配额（GB）<input type="number" id="quotaGB" step="0.5" min="0.01"></label>
+    <p class="hint">笔记存储在边缘 KV，不占用此配额。</p>
+    <div class="quota-bar"><div id="quotaFill2"></div></div>
+    <div class="quota-text" id="quotaText2"></div>
+    <div class="row">
+      <button id="btnSaveQuota">保存配额</button>
+      <button id="btnDestroy" class="danger">🔥 立即销毁全部数据</button>
+    </div>
+    <p class="hint">销毁：先删密钥再删全部密文（R2 + KV），不可恢复，需二次确认。</p>
+    <button id="btnBack" class="ghost">← 返回</button>
+  </section>
+</main>
+
+<script type="module" src="/js/crypto.js"></script>
+<script type="module" src="/js/app.js"></script>
+</body>
+</html>

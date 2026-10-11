@@ -22,9 +22,10 @@
 ```
 edge-vault/
 ├── public/              # 静态页面（index / notes / logs + 本地 CSS/JS）
-├── functions/           # 边缘函数（/api/* 路由，JS）
-├── docs/                # 方案与设计文档
-└── edgeone.json         # Makers 项目配置（schedules 定时任务等）
+├── edge-functions/      # 边缘函数（/api/* catch-all 路由 + R2 SigV4 + 工具库）
+├── docs/                # 方案文档 + 部署配置指南
+├── tools/               # 本地测试脚本（R2 连通性等）
+└── edgeone.json         # Makers 项目配置（schedules 定时任务）
 ```
 
 ## 相关项目

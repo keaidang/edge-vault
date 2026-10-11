@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Edge Vault · 审计日志</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<header>
+  <h1>🛡️ 审计日志</h1>
+  <nav><a href="/">保险库</a><a href="/notes.html">神盾笔记</a><a href="/logs.html">审计日志</a>
+    <button id="btnLogout" class="ghost">登出</button></nav>
+</header>
+<main>
+  <section>
+    <p class="hint">链式哈希防篡改（每条记录的 hash 覆盖前一条的 hash）。每日 03:30 归档到 R2。</p>
+    <table>
+      <thead><tr><th>#</th><th>时间</th><th>动作</th><th>详情</th></tr></thead>
+      <tbody id="logList"><tr><td colspan="4">加载中…</td></tr></tbody>
+    </table>
+  </section>
+</main>
+<script type="module">
+const $ = id => document.getElementById(id);
+async function api(p, o) {
+  const r = await fetch(`/api/${p}`, { credentials: 'same-origin', ...o });
+  const d = await r.json();
+  if (!r.ok || d.ok === false) { location.href = '/'; throw new Error(d.error); }
+  return d;
+}
+const actions = { init: '初始化', login: '登录', login_fail: '登录失败', checkin: '签到',
+  file_upload: '文件上传', file_delete: '文件删除', note_delete: '笔记删除',
+  config_quota: '配额调整', destroy: '销毁', archive: '日志归档' };
+(async () => {
+  try {
+    const { entries } = await api('logs');
+    const tbody = $('logList');
+    tbody.innerHTML = '';
+    if (!entries.length) { tbody.innerHTML = '<tr><td colspan="4" class="hint">暂无记录</td></tr>'; return; }
+    for (const e of entries) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${e.seq}</td><td>${new Date(e.ts).toLocaleString()}</td><td>${actions[e.action] || e.action}</td><td class="hint">${e.detail || '-'}</td>`;
+      tbody.appendChild(tr);
+    }
+  } catch {}
+})();
+$('btnLogout').onclick = async () => { try { await api('logout', { method: 'POST' }); } catch {} sessionStorage.removeItem('ev_priv'); location.href = '/'; };
+</script>
+</body>
+</html>
