@@ -33,6 +33,11 @@ export async function loginHash(password, kind) {
   return [...new Uint8Array(bits)].map(x => x.toString(16).padStart(2, '0')).join('');
 }
 
+// 假仓库（decoy）模式：按「口令+对象ID」确定性派生密钥，无需服务端存任何包裹材料
+export async function deriveFileKey(password, label) {
+  return pbkdf2(password, 'edge-vault-decoy', label);
+}
+
 // KEK：用于包裹 RSA 私钥
 async function deriveKEK(password, saltB64) {
   const salt = b64.dec(saltB64);
