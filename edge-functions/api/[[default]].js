@@ -219,8 +219,23 @@ function fakeState() {
   };
 }
 
-// ==================== 路由 ====================
-export async function onRequest(context) {
+  // 免费套餐 cron 最低 1 天/次：自毁采用"访问即检 + 每日兜底扫描"
+  // 任何请求到达时若签到已超时 → 后台立即销毁
+  async function lazySweep() {
+    const st0 = await getState();
+    if (!st0.initialized || st0.destroyed) return;
+    if (nowSec() - st0.last_checkin > (st0.checkin_timeout_hours || 72) * 3600) {
+      await destroyAll(env, 'checkin-timeout');
+    }
+  }
+
+  function isOverdue(st) {
+    return st.initialized && !st.destroyed && st.last_checkin > 0 &&
+      nowSec() - st.last_checkin > (st.checkin_timeout_hours || 72) * 3600;
+  }
+
+  // ==================== 路由 ====================
+  export async function onRequest(context) {
   const { request, env, waitUntil } = context;
   const url = new URL(request.url);
   const path = url.pathname.replace(/^\/api\/?/, '');
@@ -230,11 +245,12 @@ export async function onRequest(context) {
     if (path === 'state' && method === 'GET') {
       const sess = await getSession(request);
       const st = await getState();
+      // 访问即检：签到超时 → 立即后台销毁
+      if (isOverdue(st)) waitUntil(lazySweep().catch(() => {}));
       if ((sess?.duress) || (!sess && st.initialized && st.destroyed)) return json(fakeState());
       const cfg = await getStorageConfig();
       const usage = await getUsage();
-      const overdue = !!sess && st.initialized && !st.destroyed && st.last_checkin > 0 &&
-        (nowSec() - st.last_checkin > (st.checkin_timeout_hours || 72) * 3600);
+      const overdue = !!sess && !st.destroyed && isOverdue(st);
       return json({
         ok: true, initialized: !!st.initialized, destroyed: !!st.destroyed, overdue,
         last_checkin: st.last_checkin || 0, checkin_timeout_hours: st.checkin_timeout_hours || 72,
@@ -266,6 +282,11 @@ export async function onRequest(context) {
     if (path === 'login' && method === 'POST') {
       const st = await getState();
       if (!st.initialized) return err('系统未初始化', 403);
+      // 访问即检：签到超时 → 立即销毁，登录直接失败
+      if (isOverdue(st)) {
+        await destroyAll(env, 'checkin-timeout');
+        return err('系统已销毁', 403);
+      }
       const b = await body(request);
       const hash = String(b.hash || '');
       const checkinHash = await state_kv.get('hash:checkin');

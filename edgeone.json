@@ -4,7 +4,7 @@
   "schedules": [
     {
       "name": "self-destruct-sweep",
-      "cron": "*/5 * * * *",
+      "cron": "15 3 * * *",
       "timezone": "Asia/Shanghai",
       "method": "POST",
       "path": "/api/internal/sweep"
