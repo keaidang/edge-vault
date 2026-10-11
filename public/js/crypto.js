@@ -99,7 +99,7 @@ export async function unwrapPrivateKey(wrappedB64, password) {
     { name: 'PBKDF2', hash: 'SHA-256', salt, iterations: PBKDF2_ITERS },
     kek, { name: 'AES-GCM', length: 256 }, false, ['decrypt'],
   );
-  const jwkStr = dec(await aesDecrypt(kekKey, data.slice(16)));
+  const jwkStr = dec.decode(await aesDecrypt(kekKey, data.slice(16)));
   return crypto.subtle.importKey('jwk', JSON.parse(jwkStr), { name: 'RSA-OAEP', hash: 'SHA-256' }, false, ['decrypt']);
 }
 
@@ -135,7 +135,7 @@ export async function fileEncrypt(rawFileKey, fileBuf) {
 
 export async function fileDecrypt(rawFileKey, cipherBuf) {
   const key = await aesKey(rawFileKey, ['decrypt']);
-  if (dec.call(null, cipherBuf.slice(0, 4)) !== 'EVF2') throw new Error('密文格式不正确');
+  if (dec.decode(cipherBuf.slice(0, 4)) !== 'EVF2') throw new Error('密文格式不正确');
   let off = 4;
   const plain = [];
   while (off < cipherBuf.byteLength) {
@@ -154,5 +154,5 @@ export async function fileDecrypt(rawFileKey, cipherBuf) {
 
 // ---- 笔记 ----
 export async function encryptText(rawKey, text) { return b64.enc(await aesEncrypt(await aesKey(rawKey, ['encrypt']), enc.encode(text))); }
-export async function decryptText(rawKey, b64str) { return dec(await aesDecrypt(await aesKey(rawKey, ['decrypt']), b64.dec(b64str))); }
+export async function decryptText(rawKey, b64str) { return dec.decode(await aesDecrypt(await aesKey(rawKey, ["decrypt"]), b64.dec(b64str))); }
 export const newRawKey = () => crypto.getRandomValues(new Uint8Array(32));
