@@ -273,6 +273,14 @@ $('btnLogin').onclick = async () => {
   } catch (e) { alert(e.message); }
 };
 
+// ---- 忘记密码：跳转重置向导（后端重置窗口开放期间有效）----
+$('btnForgot').onclick = () => {
+  if (!window.confirm('重置将清空全部密钥与数据，之后需要重新初始化。继续？')) return;
+  pill('status-pill');
+  showView('view-init');
+  window.scrollTo(0, 0);
+};
+
 // ---- 签到（公开端点，签到码协议）----
 $('btnCheckin').onclick = async () => {
   try {
