@@ -1,6 +1,6 @@
 {
-  "buildCommand": "",
-  "outputDirectory": "public",
+  "buildCommand": "mkdir -p dist && cp -r public/* dist/",
+  "outputDirectory": "dist",
   "schedules": [
     {
       "name": "self-destruct-sweep",
