@@ -24,7 +24,7 @@ const SERVICE = 's3';
 const hmac = (key, data) => crypto.createHmac('sha256', key).update(data).digest();
 const sha256hex = d => crypto.createHash('sha256').update(d).digest('hex');
 
-function sigv4Headers(method, path, body = '', extraHeaders = {}) {
+function sigv4Headers(method, path, body = '', extraHeaders = {}, query = '') {
   const now = new Date();
   const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, '');
   const dateStamp = amzDate.slice(0, 8);
@@ -41,7 +41,7 @@ function sigv4Headers(method, path, body = '', extraHeaders = {}) {
   const signedHeaderList = Object.keys(headers).sort().join(';');
 
   const canonicalRequest = [
-    method, path, '',
+    method, path, query,
     sortedHeaders.join('\n') + '\n',
     signedHeaderList, payloadHash,
   ].join('\n');
@@ -63,9 +63,9 @@ function sigv4Headers(method, path, body = '', extraHeaders = {}) {
   };
 }
 
-async function call(method, path, body = '', extraHeaders = {}) {
-  const headers = sigv4Headers(method, path, body, extraHeaders);
-  const res = await fetch(`https://${HOST}${path}`, { method, headers, body: body || undefined });
+async function call(method, path, body = '', extraHeaders = {}, query = '') {
+  const headers = sigv4Headers(method, path, body, extraHeaders, query);
+  const res = await fetch(`https://${HOST}${path}${query ? `?${query}` : ''}`, { method, headers, body: body || undefined });
   return res;
 }
 
@@ -140,6 +140,21 @@ const testBody = crypto.randomBytes(64); // 模拟 AES-GCM 密文
   const url = `https://${HOST}${path}?${qp}`;
   const res = await fetch(url);
   t('预签名 GET URL（应 404，对象已删）', res.status === 404, `HTTP ${res.status}（URL 签名有效，对象不存在符合预期）`);
+}
+
+// 8. DeleteObjects 批量删除（自毁链路真正依赖的接口）
+{
+  const k1 = `__edge_vault_test/batch-${Date.now()}-1.aes`;
+  const k2 = `__edge_vault_test/batch-${Date.now()}-2.aes`;
+  await call('PUT', `/${BUCKET}/${k1}`, crypto.randomBytes(32));
+  await call('PUT', `/${BUCKET}/${k2}`, crypto.randomBytes(32));
+  const xml = `<Delete><Quiet>true</Quiet><Object><Key>${k1}</Key></Object><Object><Key>${k2}</Key></Object></Delete>`;
+  const res = await call('POST', `/${BUCKET}`, xml, {}, 'delete=');
+  const h1 = await call('HEAD', `/${BUCKET}/${k1}`);
+  const h2 = await call('HEAD', `/${BUCKET}/${k2}`);
+  const text = res.ok ? '' : await res.text();
+  t('DeleteObjects（批量删除，自毁依赖）', res.ok && h1.status === 404 && h2.status === 404,
+    `HTTP ${res.status}，复查 ${h1.status}/${h2.status}${text ? ` ${text.slice(0, 120)}` : ''}`);
 }
 
 const pass = results.filter(r => r.ok).length;

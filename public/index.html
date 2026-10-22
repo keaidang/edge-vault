@@ -5,12 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>EDGE VAULT |神盾保险库</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ctext x='50%25' y='54%25' text-anchor='middle' dominant-baseline='middle' font-size='48'%3E%F0%9F%9B%A1%EF%B8%8F%3C/text%3E%3C/svg%3E">
-    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preload" href="/fonts/orbitron-latin.woff2" as="font" type="font/woff2" crossorigin>
     <link rel="stylesheet" href="/css/style.css">
+    <link rel="stylesheet" href="/css/tailwind.css">
 </head>
 <body>
     <main class="shell pt-12">
-        <section class="panel neon-border rounded-[1.4rem] px-4 py-5 md:px-7 md:py-7">
+        <section id="app-frame" class="panel neon-border rounded-[1.4rem] px-4 py-5 md:px-7 md:py-7">
             <div class="flex flex-col gap-4 border-b border-cyan-900/60 pb-5 md:flex-row md:items-end md:justify-between">
                 <div class="space-y-2">
                     <p class="section-title">Blackbox Protocol</p>
@@ -36,10 +37,10 @@
                             <p class="text-sm text-cyan-100/65">首次部署后创建管理员密钥和签到协议。</p>
                         </div>
                         <div class="stack-form">
-                            <input type="text" id="initPass" required minlength="10" autocomplete="off" placeholder="设置管理员总密码" class="field secure-entry">
-                            <input type="text" id="initPass2" required minlength="10" autocomplete="off" placeholder="再次输入管理员总密码" class="field secure-entry">
-                            <input type="text" id="initCheckin" required minlength="6" autocomplete="off" placeholder="设置签到确认码" class="field secure-entry">
-                            <input type="text" id="initDuress" autocomplete="off" placeholder="设置胁迫销毁码（可选，留空则不可用）" class="field secure-entry">
+                            <input type="password" id="initPass" required minlength="12" autocomplete="new-password" placeholder="设置管理员总密码（至少 12 位）" class="field secure-entry">
+                            <input type="password" id="initPass2" required minlength="12" autocomplete="new-password" placeholder="再次输入管理员总密码" class="field secure-entry">
+                            <input type="text" id="initCheckin" required minlength="8" autocomplete="off" placeholder="设置签到确认码（至少 8 位）" class="field secure-entry">
+                            <input type="password" id="initDuress" autocomplete="new-password" placeholder="设置胁迫销毁码（可选，留空则不可用）" class="field secure-entry">
                             <input type="number" id="initTimeout" value="72" min="1" placeholder="签到超时（小时，默认 72）" class="field">
                             <button type="button" id="btnInit" class="btn-neon orbitron w-full">生成 RSA-3072 密钥对</button>
                         </div>
@@ -86,10 +87,10 @@
                             </div>
                             <div class="metric">
                                 <div class="orbitron text-2xl text-cyan-700 md:text-3xl">ENCRYPTION ACTIVE</div>
-                                <p class="mt-3 text-sm leading-6 text-cyan-100/60">请输入密码登录神盾系统</p>
+                                <p class="mt-3 text-sm leading-6 text-cyan-100/60">输入账号密码进入保险库；使用笔记密码登录会自动进入神盾笔记。</p>
                             </div>
                             <div class="stack-form">
-                                <input type="text" id="loginPass" required autocomplete="off" placeholder="输入系统密码" class="field secure-entry">
+                                <input type="password" id="loginPass" required autocomplete="current-password" placeholder="输入系统密码" class="field secure-entry">
                                 <button type="button" id="btnLogin" class="btn-neon orbitron w-full">进入系统</button>
                                 <button type="button" id="btnForgot" class="btn-ghost orbitron w-full">忘记密码？重置系统（清空全部数据）</button>
                             </div>
@@ -103,10 +104,10 @@
                         <div class="space-y-5 sidebar-scroll">
                             <div class="metric">
                                 <p class="section-title">Session</p>
-                                <div class="mt-2 orbitron text-xl text-cyan-300 md:text-2xl">ADMIN</div>
+                                <div id="sessionUser" class="mt-2 orbitron text-xl text-cyan-300 md:text-2xl">ADMIN</div>
                                 <p class="mt-3 text-sm leading-6 text-cyan-100/65">
                                     当前通过服务端会话访问。
-                                    <br>系统容量: <span id="vaultSize">-- / --</span>
+                                    <br>系统容量: <span id="quotaText">-- / --</span>
                                 </p>
                             </div>
 
@@ -126,7 +127,45 @@
                                     </div>
                                     <span class="admin-toggle-icon text-xl text-cyan-300">⌄</span>
                                 </summary>
-                                <div class="admin-content space-y-4">
+                                <div class="admin-content space-y-5">
+                                    <div class="space-y-3">
+                                        <p class="section-title">User Keyring</p>
+                                        <select id="adminUserTarget" class="field">
+                                            <option value="user1">user1</option>
+                                            <option value="user2">user2</option>
+                                            <option value="user3">user3</option>
+                                            <option value="admin">admin</option>
+                                        </select>
+                                        <input type="password" id="adminUserPass" autocomplete="new-password" placeholder="设置该槽位登录密码（至少 12 位）" class="field secure-entry">
+                                        <input type="password" id="adminUserPass2" autocomplete="new-password" placeholder="再次输入该槽位密码" class="field secure-entry">
+                                        <button type="button" id="btnManageUser" class="btn-neon w-full">创建 / 重置用户密钥</button>
+                                        <p class="text-xs leading-5 text-cyan-100/45">已有加密文件的槽位禁止重置密钥（服务端返回 409）。</p>
+                                    </div>
+
+                                    <div class="space-y-3">
+                                        <p class="section-title">Aegis Notes</p>
+                                        <select id="adminNoteTarget" class="field">
+                                            <option value="user1">user1</option>
+                                            <option value="user2">user2</option>
+                                            <option value="user3">user3</option>
+                                            <option value="admin">admin</option>
+                                        </select>
+                                        <input type="password" id="adminNotePass" autocomplete="new-password" placeholder="设置笔记独立密码（至少 12 位）" class="field secure-entry">
+                                        <input type="password" id="adminNotePass2" autocomplete="new-password" placeholder="再次输入笔记密码" class="field secure-entry">
+                                        <div class="grid gap-2 md:grid-cols-2">
+                                            <button type="button" id="btnEnableNotes" class="btn-neon w-full">启用笔记</button>
+                                            <button type="button" id="btnDisableNotes" class="btn-danger w-full">关闭笔记</button>
+                                        </div>
+                                    </div>
+
+                                    <div class="space-y-3">
+                                        <p class="section-title">Protocol Codes</p>
+                                        <input type="text" id="adminCheckinCode" autocomplete="off" placeholder="新的签到确认码" class="field secure-entry">
+                                        <button type="button" id="btnUpdateCheckin" class="btn-neon w-full">更新签到码</button>
+                                        <input type="text" id="adminDuressCode" autocomplete="off" placeholder="新的胁迫销毁码" class="field secure-entry">
+                                        <button type="button" id="btnUpdateDuress" class="btn-neon w-full">更新胁迫码</button>
+                                    </div>
+
                                     <div class="dense-form">
                                         <input type="number" id="quotaGB" step="0.5" min="0.01" placeholder="保险库配额（GB）" class="field">
                                         <button type="button" id="btnSaveQuota" class="btn-neon w-full">保存存储配额</button>
@@ -156,11 +195,13 @@
                             <table id="filesTable" class="desktop-table files-table mt-2 w-full text-left text-sm">
                                 <colgroup>
                                     <col>
-                                    <col style="width: 440px;">
+                                    <col style="width: 110px;">
+                                    <col style="width: 330px;">
                                 </colgroup>
                                 <thead>
                                     <tr class="border-b border-cyan-900/70 text-cyan-600">
                                         <th class="pb-3 font-medium">文件名</th>
+                                        <th class="pb-3 font-medium">大小</th>
                                         <th class="pb-3 text-right font-medium">操作</th>
                                     </tr>
                                 </thead>
@@ -186,7 +227,6 @@
             <a href="https://github.com/keaidang/edge-vault" target="_blank" rel="noopener noreferrer">keaidang</a></div>
     </footer>
 
-    <script type="module" src="/js/crypto.js"></script>
     <script type="module" src="/js/app.js"></script>
 </body>
 </html>

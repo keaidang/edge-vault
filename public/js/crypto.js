@@ -27,10 +27,12 @@ async function pbkdf2(password, saltStr, info) {
   );
 }
 
-// 哈希派生（服务端只存哈希）：kind = 'login' | 'checkin' | 'duress'
+// 哈希派生（服务端只存哈希）：kind = 'login' | 'checkin' | 'note'
+// 胁迫码沿用 'login'（登录框）与 'checkin'（签到框）两种 kind 各存一份，命中即销毁
+// salt 为 per-vault 随机盐（/api/state 公开返回），缺省回退旧部署的固定盐
 // 与原版 Aegis Vault 协议一致：主密码登录、签到码重置计时器、胁迫码触发销毁
-export async function loginHash(password, kind) {
-  const bits = await pbkdf2(password, 'edge-vault', kind);
+export async function loginHash(password, kind, salt = 'edge-vault') {
+  const bits = await pbkdf2(password, salt, kind);
   return [...new Uint8Array(bits)].map(x => x.toString(16).padStart(2, '0')).join('');
 }
 

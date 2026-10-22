@@ -1,0 +1,15 @@
+{
+  "name": "edge-vault",
+  "version": "2.1.0",
+  "private": true,
+  "description": "边缘原生加密保险库（EdgeOne Makers + Cloudflare R2）",
+  "type": "module",
+  "scripts": {
+    "build:css": "tailwindcss -c tailwind.config.js -i tools/tailwind.src.css -o public/css/tailwind.css --minify",
+    "watch:css": "tailwindcss -c tailwind.config.js -i tools/tailwind.src.css -o public/css/tailwind.css --watch",
+    "test": "node tools/api-smoke-test.mjs && node tools/crypto-test.mjs"
+  },
+  "devDependencies": {
+    "tailwindcss": "3.4.17"
+  }
+}

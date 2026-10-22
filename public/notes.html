@@ -5,8 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>EDGE VAULT |神盾笔记</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ctext x='50%25' y='54%25' text-anchor='middle' dominant-baseline='middle' font-size='48'%3E%F0%9F%9B%A1%EF%B8%8F%3C/text%3E%3C/svg%3E">
-    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preload" href="/fonts/orbitron-latin.woff2" as="font" type="font/woff2" crossorigin>
     <link rel="stylesheet" href="/css/style.css">
+    <link rel="stylesheet" href="/css/tailwind.css">
 </head>
 <body class="auth-body">
     <main class="shell pt-12 auth-shell">
@@ -20,7 +21,7 @@
                 <div class="flex flex-wrap items-center gap-2">
                     <span class="status-pill text-emerald-300">● 隧道运行中</span>
                     <span id="idle-countdown" class="status-pill idle-pill">60s</span>
-                    <span class="status-pill">ADMIN</span>
+                    <span id="notesUser" class="status-pill">NOTES</span>
                 </div>
             </div>
 
@@ -31,10 +32,11 @@
                         <div class="space-y-4">
                             <div class="text-center">
                                 <h2 class="orbitron mt-2 text-xl text-cyan-300 md:text-2xl">进入笔记</h2>
-                                <p class="mt-3 text-sm leading-6 text-cyan-100/65">输入系统密码进入神盾笔记。</p>
+                                <p class="mt-3 text-sm leading-6 text-cyan-100/65">输入该账号的<strong class="text-cyan-200">笔记密码</strong>（与保险库密码相互独立）。</p>
+                                <p class="mt-2 text-xs leading-5 text-cyan-100/45">尚未启用？请先用管理员账号在保险库的「系统管理协议 → Aegis Notes」中启用。</p>
                             </div>
                             <div class="stack-form">
-                                <input type="text" id="notesPass" required autocomplete="off" placeholder="输入系统密码" class="field secure-entry">
+                                <input type="password" id="notesPass" required autocomplete="current-password" placeholder="输入笔记密码" class="field secure-entry">
                                 <button type="button" id="btnNotesUnlock" class="btn-neon orbitron w-full">进入笔记</button>
                             </div>
                         </div>
@@ -126,7 +128,6 @@
             <a href="https://github.com/keaidang/edge-vault" target="_blank" rel="noopener noreferrer">keaidang</a></div>
     </footer>
 
-    <script type="module" src="/js/crypto.js"></script>
     <script type="module" src="/js/notes.js"></script>
 </body>
 </html>

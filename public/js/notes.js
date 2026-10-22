@@ -1,261 +1,344 @@
-// Edge Vault — 神盾笔记前端（原版风格：侧栏列表 + 编辑区 + 图片附件）
-import { loginHash, unwrapPrivateKey, unwrapKeyWithPriv, encryptText, decryptText, deriveFileKey, b64 } from './crypto.js';
+// Edge Vault — 神盾笔记前端（独立密钥 / 独立笔记会话 / 敏感操作二次验口令）
+import { loginHash, unwrapPrivateKey, wrapKeyWithPub, unwrapKeyWithPriv, fileEncrypt, fileDecrypt, encryptText, decryptText, newRawKey } from './crypto.js';
 
 const $ = id => document.getElementById(id);
-let privKey = null;
-let decoyMode = false;
-let decoyPass = null;
-let currentNote = null; // {id, rawKey(Uint8Array), title}
-let noteIndex = [];
+const show = (id, on = true) => { const el = $(id); if (el) el.classList.toggle('hidden', !on); };
+const fmtSize = n => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`;
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
 
-async function api(path, opts = {}) {
-  const res = await fetch(`/api/${path}`, { headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', ...opts });
-  const data = await res.json();
-  if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
+let authSalt = '';
+let csrf = '';
+let notePrivKey = null;   // 笔记密钥对私钥（仅内存）
+let notePubJwk = null;
+let activeNote = { id: null, rawKey: null, attachments: [] };
+let unlocked = false;
+
+async function api(path, { method = 'GET', body } = {}) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (csrf && method !== 'GET') headers['x-csrf-token'] = csrf;
+  const res = await fetch(`/api/${path}`, {
+    method, headers, credentials: 'same-origin',
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false) {
+    const e = new Error(data.error || `HTTP ${res.status}`);
+    e.status = res.status;
+    throw e;
+  }
   return data;
 }
 
-// ---- 60s 空闲登出 ----
-let idleRemaining = 60, idleSubmitting = false;
+// 笔记页所有读写都要求 3 分钟内的笔记口令验证
+async function requireVerify() {
+  const pass = window.prompt('请输入笔记密码以继续：');
+  if (!pass) throw new Error('已取消');
+  await api('verify', { method: 'POST', body: { scope: 'notes', hash: await loginHash(pass, 'note', authSalt) } });
+}
+
+function status(msg, bad = false) {
+  const el = $('noteStatus');
+  if (!el) return;
+  el.textContent = msg;
+  el.classList.toggle('text-red-300', bad);
+  el.classList.toggle('text-cyan-100/60', !bad);
+}
+
+// ---- 空闲自动锁定（与原版一致：60 秒）----
+let idleRemaining = 60;
 function renderIdle(v) {
   const el = $('idle-countdown');
+  if (!el) return;
   el.textContent = `${String(Math.max(0, v)).padStart(2, '0')}s`;
   el.classList.toggle('is-warning', v <= 10);
 }
-['pointerdown', 'pointermove', 'keydown', 'scroll', 'touchstart', 'click'].forEach(e => window.addEventListener(e, () => {
-  if (idleSubmitting) return;
-  idleRemaining = 60; renderIdle(60);
-}, { passive: true }));
-setInterval(() => {
-  if (!privKey && !decoyMode) return;
-  idleRemaining -= 1; renderIdle(idleRemaining);
-  if (idleRemaining <= 0 && !idleSubmitting) { idleSubmitting = true; doLogout(); }
-}, 1000);
-
-async function noteKey(note) {
-  if (decoyMode) return deriveFileKey(decoyPass, note.id);
-  return new Uint8Array(await unwrapKeyWithPriv(privKey, note.wrapped_key));
+function lock() {
+  unlocked = false;
+  notePrivKey = null;
+  activeNote = { id: null, rawKey: null, attachments: [] };
+  $('noteBody').value = '';
+  $('noteTitle').value = '';
+  show('notes-main', false);
+  show('notes-gate', true);
+  status('');
+  api('logout', { method: 'POST' }).catch(() => {});
+  csrf = '';
 }
+function resetIdle() {
+  if (!unlocked) return;
+  idleRemaining = 60;
+  renderIdle(idleRemaining);
+}
+setInterval(() => {
+  if (!unlocked) return;
+  idleRemaining -= 1;
+  renderIdle(idleRemaining);
+  if (idleRemaining <= 0) lock();
+}, 1000);
+['pointerdown', 'pointermove', 'keydown', 'scroll', 'touchstart', 'click'].forEach(e => window.addEventListener(e, resetIdle, { passive: true }));
+window.addEventListener('keydown', e => {
+  const k = String(e.key || '').toLowerCase();
+  if ((k === 'f5' || (k === 'r' && (e.ctrlKey || e.metaKey))) && unlocked) { e.preventDefault(); lock(); }
+});
 
+// ==================== 解锁（笔记密码 → 笔记会话）====================
+$('btnNotesUnlock').onclick = async () => {
+  const pass = $('notesPass').value;
+  if (!pass) return;
+  try {
+    const r = await api('login', { method: 'POST', body: { hash: await loginHash(pass, 'note', authSalt) } });
+    if (r.mode !== 'notes') throw new Error('该密码不是笔记密码，请到保险库登录');
+    csrf = r.csrf;
+    if ($('notesUser')) $('notesUser').textContent = String(r.user || 'NOTES').toUpperCase();
+    const info = await api('keyinfo?scope=notes');
+    notePubJwk = info.note.pub;
+    notePrivKey = await unwrapPrivateKey(info.note.wrapped, pass);
+    unlocked = true;
+    $('notesPass').value = '';
+    show('notes-gate', false);
+    show('notes-main', true);
+    resetIdle();
+    await loadList();
+  } catch (e) { alert(e.message); }
+};
+$('notesPass').addEventListener('keydown', e => { if (e.key === 'Enter') $('btnNotesUnlock').click(); });
+
+// ==================== 列表 ====================
 async function loadList() {
   const { notes } = await api('notes/list');
-  noteIndex = notes;
   const list = $('noteList');
   list.innerHTML = '';
-  $('notesEmpty').classList.toggle('hidden', notes.length > 0);
-  for (const n of notes) {
-    const card = document.createElement('a');
-    card.className = `note-menu-card block no-underline text-inherit cursor-pointer ${currentNote?.id === n.id ? 'is-active' : ''}`;
-    card.dataset.open = n.id;
-    let title = '🔒 加密笔记';
-    if (currentNote?.id === n.id) { try { title = currentNote.title; } catch {} }
+  show('notesEmpty', notes.length === 0);
+  notes.forEach((n, i) => {
+    const card = document.createElement('article');
+    card.className = 'note-card';
+    card.dataset.noteId = n.id;
+    const when = new Date((n.updated || n.created || 0) * 1000).toLocaleString();
     card.innerHTML = `
       <div class="space-y-2">
-        <div class="flex items-start justify-between gap-3">
-          <div class="min-w-0 flex-1">
-            <p class="section-title">Encrypted Note</p>
-            <div class="mt-2 text-sm font-medium text-cyan-100"><span class="note-title-text">${title}</span></div>
-          </div>
-        </div>
-        <div class="text-xs leading-6 text-cyan-100/55">更新 ${new Date(n.updated * 1000).toLocaleString('zh-CN')}</div>
+        <p class="section-title">Note ${String(i + 1).padStart(2, '0')}</p>
+        <p class="text-sm font-medium text-cyan-100">加密笔记</p>
+        <p class="text-xs text-cyan-100/50">${escapeHtml(when)} · 附件 ${Number(n.attachments || 0)}</p>
       </div>`;
+    card.onclick = () => openNote(n.id, card);
     list.appendChild(card);
+  });
+  for (const el of list.querySelectorAll('[data-note-id]')) {
+    el.classList.toggle('is-active', el.dataset.noteId === activeNote.id);
   }
 }
 
-$('noteList').onclick = e => {
-  const card = e.target.closest('[data-open]');
-  if (card) openNote(card.dataset.open);
-};
+function markActive() {
+  const list = $('noteList');
+  for (const el of list.querySelectorAll('[data-note-id]')) {
+    el.classList.toggle('is-active', el.dataset.noteId === activeNote.id);
+  }
+}
 
-async function openNote(id) {
-  const { note } = await api(`notes/get/${id}`);
+// ==================== 读取 / 新建 ====================
+async function openNote(id, card) {
   try {
-    const rawKey = await noteKey(note);
-    currentNote = { id, rawKey, title: await decryptText(rawKey, note.title_enc) };
-    $('noteTitle').value = currentNote.title;
-    $('noteBody').value = await decryptText(rawKey, note.body_enc);
-    $('noteStatus').textContent = '';
-    renderAttachments(note.attachments || [], rawKey);
-    await loadList();
-  } catch { alert('解密失败（密钥不匹配）'); }
-}
-
-function renderAttachments(atts, rawKey) {
-  $('attCount').textContent = String(atts.length);
-  $('attEmpty').classList.toggle('hidden', atts.length > 0);
-  const list = $('attList');
-  list.innerHTML = '';
-  for (const a of atts) {
-    const card = document.createElement('article');
-    card.className = 'attachment-card';
-    card.innerHTML = `
-      <div class="space-y-3">
-        <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-          <div class="min-w-0">
-            <div class="text-sm font-medium text-cyan-100"><span class="file-name-text">${a.name}</span></div>
-            <div class="mt-2 text-xs text-cyan-100/55">上传于 ${new Date(a.created * 1000).toLocaleString('zh-CN')}</div>
-          </div>
-          <div class="status-pill">${a.size} B</div>
-        </div>
-        <div class="attachment-actions">
-          <button type="button" data-att-dl="${a.id}" data-att-name="${a.name}" class="btn-neon">下载附件</button>
-          <button type="button" data-att-del="${a.id}" class="btn-danger">删除附件</button>
-        </div>
-      </div>`;
-    list.appendChild(card);
-  }
-  list.onclick = async e => {
-    const dl = e.target.closest('[data-att-dl]');
-    const del = e.target.closest('[data-att-del]');
-    if (!dl && !del) return;
-    try {
-      if (dl) {
-        const { url } = await api(`notes/att/${dl.dataset.attDl}`);
-        const ct = new Uint8Array(await (await fetch(url)).arrayBuffer());
-        const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: ct.slice(0, 12) }, await crypto.subtle.importKey('raw', rawKey, { name: 'AES-GCM' }, false, ['decrypt']), ct.slice(12));
-        const aEl = document.createElement('a');
-        aEl.href = URL.createObjectURL(new Blob([plain]));
-        aEl.download = dl.dataset.attName;
-        aEl.click();
-        URL.revokeObjectURL(aEl.href);
-      }
-      if (del) {
-        if (!window.confirm('确认删除当前附件？')) return;
-        await api('notes/att/delete', { method: 'POST', body: JSON.stringify({ att_id: del.dataset.attDel }) });
-        const note = currentNote;
-        note.attachments = (note.attachments || []).filter(x => x.id !== del.dataset.attDel);
-        await saveNoteSilent();
-      }
-    } catch (err) { alert(err.message); }
-  };
-}
-
-async function saveNoteSilent() {
-  const { note } = await api(`notes/get/${currentNote.id}`);
-  await api('notes/save', { method: 'POST', body: JSON.stringify({
-    note_id: currentNote.id,
-    title_enc: await encryptText(currentNote.rawKey, currentNote.title),
-    body_enc: await encryptText(currentNote.rawKey, $('noteBody').value),
-    wrapped_key: currentNote.wrapped_key || '',
-    attachments: currentNote.attachments || [],
-  }) });
-  void note;
+    await requireVerify();
+    const { note } = await api(`notes/get/${id}`);
+    activeNote = { id: note.id, rawKey: null, attachments: note.attachments || [] };
+    if (note.wrapped_key) activeNote.rawKey = await unwrapKeyWithPriv(notePrivKey, note.wrapped_key);
+    $('noteTitle').value = note.title_enc && activeNote.rawKey ? await decryptText(activeNote.rawKey, note.title_enc) : '';
+    $('noteBody').value = note.body_enc && activeNote.rawKey ? await decryptText(activeNote.rawKey, note.body_enc) : '';
+    status('已解密显示');
+    renderAttachments();
+    markActive();
+    resetIdle();
+  } catch (e) { status(e.message, true); alert(e.message); }
 }
 
 $('btnNewNote').onclick = () => {
-  if (!privKey && !decoyMode) return;
-  currentNote = null;
+  activeNote = { id: null, rawKey: null, attachments: [] };
   $('noteTitle').value = '';
   $('noteBody').value = '';
-  $('noteStatus').textContent = '';
-  $('attCount').textContent = '0';
-  $('attList').innerHTML = '';
-  $('attEmpty').classList.remove('hidden');
+  status('新笔记：保存后生成独立文件密钥');
+  renderAttachments();
+  markActive();
+  resetIdle();
 };
 
+// ==================== 保存 / 删除 ====================
 $('btnSaveNote').onclick = async () => {
-  const title = $('noteTitle').value, bodyText = $('noteBody').value;
+  const title = $('noteTitle').value;
+  const body = $('noteBody').value;
+  if (!body.trim()) { status('正文不能为空', true); return; }
+  if (body.length > 750 * 1024) { status('正文过大（服务端上限约 750KB 明文），请用附件', true); return; }
   try {
-    const id = currentNote?.id || crypto.randomUUID().replace(/-/g, '').slice(0, 16);
-    let rawKey = currentNote?.rawKey;
-    let wrappedKey = currentNote?.wrapped_key || '';
-    if (!rawKey) rawKey = crypto.getRandomValues(new Uint8Array(32));
-    if (!decoyMode) {
-      const pub = (await api('keyinfo')).pub;
-      const pubKey = await crypto.subtle.importKey('jwk', pub, { name: 'RSA-OAEP', hash: 'SHA-256' }, false, ['encrypt']);
-      wrappedKey = b64.enc(await crypto.subtle.encrypt({ name: 'RSA-OAEP' }, pubKey, rawKey));
+    await requireVerify();
+    if (!activeNote.rawKey) {
+      activeNote.rawKey = newRawKey();
+      activeNote.wrappedKey = await wrapKeyWithPub(notePubJwk, activeNote.rawKey);
     }
-    await api('notes/save', { method: 'POST', body: JSON.stringify({
-      note_id: id,
-      title_enc: await encryptText(rawKey, title),
-      body_enc: await encryptText(rawKey, bodyText),
-      wrapped_key: wrappedKey,
-      attachments: currentNote?.attachments || [],
-    }) });
-    currentNote = { id, rawKey, title, wrapped_key: wrappedKey, attachments: currentNote?.attachments || [] };
-    $('noteStatus').textContent = `✅ 已保存 ${new Date().toLocaleTimeString('zh-CN')}`;
+    const payload = {
+      note_id: activeNote.id || undefined,
+      title_enc: await encryptText(activeNote.rawKey, title),
+      body_enc: await encryptText(activeNote.rawKey, body),
+      wrapped_key: activeNote.wrappedKey || await wrapKeyWithPub(notePubJwk, activeNote.rawKey),
+      attachments: activeNote.attachments,
+    };
+    const r = await api('notes/save', { method: 'POST', body: payload });
+    activeNote.id = r.note_id;
+    status(`已保存 ${new Date().toLocaleTimeString()}`);
     await loadList();
-  } catch (e) { $('noteStatus').textContent = `❌ ${e.message}`; }
+    markActive();
+    resetIdle();
+  } catch (e) { status(e.message, true); alert(e.message); }
 };
 
 $('btnDeleteNote').onclick = async () => {
-  if (!currentNote) { alert('请先选择一篇笔记'); return; }
-  if (!window.confirm('确认删除当前笔记？')) return;
-  await api(`notes/delete/${currentNote.id}`, { method: 'POST' });
-  currentNote = null;
-  $('noteTitle').value = ''; $('noteBody').value = '';
-  $('attList').innerHTML = ''; $('attEmpty').classList.remove('hidden');
-  await loadList();
+  if (!activeNote.id) { status('当前没有已保存的笔记', true); return; }
+  if (!window.confirm('删除该笔记及其全部附件？（不可恢复）')) return;
+  try {
+    await requireVerify();
+    await api(`notes/delete/${activeNote.id}`, { method: 'POST' });
+    activeNote = { id: null, rawKey: null, attachments: [] };
+    $('noteTitle').value = '';
+    $('noteBody').value = '';
+    renderAttachments();
+    status('笔记已删除');
+    await loadList();
+  } catch (e) { status(e.message, true); alert(e.message); }
 };
+
+// ==================== 附件 ====================
+function renderAttachments() {
+  const list = $('attList');
+  list.innerHTML = '';
+  const atts = activeNote.attachments || [];
+  show('attEmpty', atts.length === 0);
+  if ($('attCount')) $('attCount').textContent = String(atts.length);
+  atts.forEach(a => {
+    const card = document.createElement('article');
+    card.className = 'attachment-card';
+    card.innerHTML = `
+      <div class="space-y-2">
+        <p class="text-sm font-medium text-cyan-100 att-name">附件 ${escapeHtml(String(a.id).slice(0, 6))}</p>
+        <p class="text-xs text-cyan-100/50">${fmtSize(Number(a.size || 0))}</p>
+      </div>
+      <div class="inline-actions">
+        <button type="button" class="btn-ghost px-3 py-2" data-att-dl="${escapeHtml(a.id)}">下载</button>
+        <button type="button" class="btn-danger px-3 py-2" data-att-del="${escapeHtml(a.id)}">删除</button>
+      </div>`;
+    list.appendChild(card);
+  });
+  decryptAttachmentNames();
+}
+
+async function decryptAttachmentNames() {
+  if (!activeNote.rawKey) return;
+  for (const el of $('attList').querySelectorAll('[data-att-dl]')) {
+    const id = el.dataset.attDl;
+    const meta = (activeNote.attachments || []).find(a => String(a.id) === String(id));
+    if (!meta || !meta.name_enc) continue;
+    try {
+      const name = await decryptText(activeNote.rawKey, meta.name_enc);
+      const card = el.closest('.attachment-card');
+      const label = card?.querySelector('.att-name');
+      if (label) label.textContent = name;
+    } catch { /* 保持占位文本 */ }
+  }
+}
+
+$('attList').onclick = async e => {
+  const dl = e.target.closest('[data-att-dl]');
+  const del = e.target.closest('[data-att-del]');
+  if (dl) await downloadAttachment(dl.dataset.attDl);
+  if (del) await deleteAttachment(del.dataset.attDel);
+};
+
+async function downloadAttachment(attId) {
+  try {
+    if (!activeNote.rawKey) throw new Error('请先打开笔记以获取文件密钥');
+    await requireVerify();
+    const { url } = await api(`notes/att/${attId}?note_id=${encodeURIComponent(activeNote.id)}`);
+    const ct = new Uint8Array(await (await fetch(url)).arrayBuffer());
+    const plain = await fileDecrypt(activeNote.rawKey, ct);
+    const meta = (activeNote.attachments || []).find(a => String(a.id) === String(attId));
+    let name = `attachment-${String(attId).slice(0, 6)}`;
+    if (meta?.name_enc) { try { name = await decryptText(activeNote.rawKey, meta.name_enc); } catch { /* 用默认名 */ } }
+    const blobUrl = URL.createObjectURL(new Blob([plain]));
+    const a = document.createElement('a');
+    a.href = blobUrl; a.download = name; a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+  } catch (e) { alert(e.message); }
+}
+
+async function deleteAttachment(attId) {
+  if (!window.confirm('删除该附件？')) return;
+  try {
+    await requireVerify();
+    await api('notes/att/delete', { method: 'POST', body: { note_id: activeNote.id, att_id: attId } });
+    activeNote.attachments = (activeNote.attachments || []).filter(a => String(a.id) !== String(attId));
+    renderAttachments();
+    await loadList();
+    markActive();
+  } catch (e) { alert(e.message); }
+}
 
 $('btnAttUpload').onclick = async () => {
-  const file = $('attInput').files[0];
-  if (!file) { alert('请选择图片'); return; }
-  if (!currentNote) { alert('请先保存笔记再上传附件'); return; }
+  const input = $('attInput');
+  const file = input.files && input.files[0];
+  if (!file) { status('请选择要上传的附件', true); return; }
   try {
-    const { att_id: attId, upload_url: uploadUrl } = await api('notes/att/meta', { method: 'POST', body: JSON.stringify({}) });
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const key = await crypto.subtle.importKey('raw', currentNote.rawKey, { name: 'AES-GCM' }, false, ['encrypt']);
-    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new Uint8Array(await file.arrayBuffer()));
-    const packed = new Uint8Array(12 + ct.byteLength);
-    packed.set(iv); packed.set(new Uint8Array(ct), 12);
-    const put = await fetch(uploadUrl, { method: 'PUT', body: packed });
+    if (!activeNote.id) throw new Error('请先保存笔记再上传附件');
+    if (!activeNote.rawKey) throw new Error('请先重新打开笔记以获取文件密钥');
+    await requireVerify();
+    const { att_id, upload_url } = await api('notes/att/meta', { method: 'POST', body: { note_id: activeNote.id } });
+    const cipher = await fileEncrypt(activeNote.rawKey, new Uint8Array(await file.arrayBuffer()));
+    const put = await fetch(upload_url, { method: 'PUT', body: cipher });
     if (!put.ok) throw new Error(`R2 上传失败 HTTP ${put.status}`);
-    currentNote.attachments = currentNote.attachments || [];
-    currentNote.attachments.push({ id: attId, name: file.name, size: ct.byteLength, created: Math.floor(Date.now() / 1000) });
-    await saveNoteSilent();
-    $('attInput').value = '';
-    renderAttachments(currentNote.attachments, currentNote.rawKey);
-  } catch (e) { alert(`附件上传失败：${e.message}`); }
-};
-
-async function doLogout() {
-  try { await api('logout', { method: 'POST' }); } catch {}
-  sessionStorage.removeItem('ev_priv');
-  sessionStorage.removeItem('ev_pass');
-  sessionStorage.removeItem('ev_decoy');
-  location.href = '/';
-}
-$('btnLogout').onclick = doLogout;
-
-$('btnNotesUnlock').onclick = async () => {
-  const pass = $('notesPass').value;
-  try {
-    // 确保会话有效（若主页面已登录则跳过登录）
-    try { await api('keyinfo'); } catch {
-      await api('login', { method: 'POST', body: JSON.stringify({ hash: await loginHash(pass, 'login') }) });
-    }
-    const info = await api('keyinfo');
-    if (info.decoy) {
-      decoyMode = true; decoyPass = sessionStorage.getItem('ev_decoy') || pass;
-    } else {
-      privKey = await unwrapPrivateKey(info.wrapped, pass);
-      sessionStorage.setItem('ev_priv', JSON.stringify(await crypto.subtle.exportKey('jwk', privKey)));
-    }
-    $('notes-gate').classList.add('hidden');
-    $('notes-main').classList.remove('hidden');
+    activeNote.attachments = [
+      ...(activeNote.attachments || []),
+      { id: att_id, name_enc: await encryptText(activeNote.rawKey, file.name), size: cipher.byteLength, created: Math.floor(Date.now() / 1000) },
+    ];
+    await api('notes/save', {
+      method: 'POST',
+      body: {
+        note_id: activeNote.id,
+        title_enc: await encryptText(activeNote.rawKey, $('noteTitle').value),
+        body_enc: await encryptText(activeNote.rawKey, $('noteBody').value),
+        wrapped_key: activeNote.wrappedKey || await wrapKeyWithPub(notePubJwk, activeNote.rawKey),
+        attachments: activeNote.attachments,
+      },
+    });
+    input.value = '';
+    renderAttachments();
+    status('附件已加密上传');
     await loadList();
-  } catch (e) { alert(`解锁失败：${e.message}`); }
+    markActive();
+  } catch (e) { status(e.message, true); alert(e.message); }
 };
+
+// ==================== 退出 / 启动 ====================
+$('btnLogout').onclick = () => { lock(); location.href = '/'; };
+
+function showBootError(e) {
+  const gate = $('notes-gate');
+  if (gate) gate.classList.remove('hidden');
+  show('notes-main', false);
+  status(`无法连接边缘服务：${e.message}`, true);
+}
 
 async function boot() {
-  const jwkStr = sessionStorage.getItem('ev_priv');
-  decoyPass = sessionStorage.getItem('ev_decoy');
-  let ready = false;
-  if (jwkStr) {
-    try {
-      privKey = await crypto.subtle.importKey('jwk', JSON.parse(jwkStr), { name: 'RSA-OAEP', hash: 'SHA-256' }, false, ['decrypt']);
-      await api('keyinfo');
-      ready = true;
-    } catch {}
-  } else if (decoyPass) {
-    decoyMode = true;
-    try { await api('keyinfo'); ready = true; } catch {}
+  const st = await api('state');
+  authSalt = st.auth_salt || '';
+  if (st.destroyed || !st.initialized) {
+    status('系统未初始化或已销毁，请先在保险库完成初始化', true);
+    $('btnNotesUnlock').disabled = true;
+    return;
   }
-  if (!ready) { $('notes-main').classList.add('hidden'); $('notes-gate').classList.remove('hidden'); return; }
-  $('notes-gate').classList.add('hidden');
-  $('notes-main').classList.remove('hidden');
-  await loadList();
+  // 会话即使存在也不保留私钥：每次进入笔记页都需重新输入笔记密码
+  show('notes-gate', true);
+  show('notes-main', false);
 }
-boot();
+
+boot().catch(showBootError);
