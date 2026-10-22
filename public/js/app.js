@@ -482,7 +482,7 @@ $('btnDestroy').onclick = async () => {
 };
 
 $('btnLogout').onclick = doLogout;
-$('btnResetSystem').onclick = () => showView('view-init');
+$('btnResetSystem').onclick = () => { pill('status-pill'); showView('view-init'); };
 
 $('loginPass').addEventListener('keydown', e => { if (e.key === 'Enter') $('btnLogin').click(); });
 
