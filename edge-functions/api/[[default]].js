@@ -827,8 +827,8 @@ export async function onRequest(context) {
         wrapped_key: b.wrapped_key || existing?.wrapped_key || '',
         attachments: Array.isArray(b.attachments) ? b.attachments : (existing?.attachments || []),
         created: existing?.created || now, updated: now,
-        // 原版「详细信息 → Modification History」：只保留最近 10 次修改时间戳
-        history: [...(existing?.history || []), now].slice(-10),
+        // 原版「详细信息 → Modification History」：保留最近 200 次修改时间戳（与原版 notes_manager 一致）
+        history: [...(existing?.history || []), now].slice(-200),
       };
       await state_kv.put(key, JSON.stringify(note));
       const index = (await state_kv.get(notesIndexKey(sess.user), 'json')) || [];

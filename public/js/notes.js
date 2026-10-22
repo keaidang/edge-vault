@@ -105,6 +105,7 @@ $('btnNotesUnlock').onclick = async () => {
     show('notes-main', true);
     resetIdle();
     await loadList();
+    await applyDeepLink();
   } catch (e) { alert(e.message); }
 };
 $('notesPass').addEventListener('keydown', e => { if (e.key === 'Enter') $('btnNotesUnlock').click(); });
@@ -160,6 +161,22 @@ function markActive() {
   }
 }
 
+// 原版笔记页用 /notes?note=<id>（新建为 ?note=create）表达"当前选中的笔记"，
+// 刷新、收藏、从历史记录返回都能回到同一篇；这里用 replaceState 保持同一语义。
+function syncUrl(id) {
+  const query = id ? `?note=${encodeURIComponent(id)}` : '';
+  try { history.replaceState(null, '', `${location.pathname}${query}`); } catch { /* file:// 等场景忽略 */ }
+}
+
+async function applyDeepLink() {
+  const want = new URLSearchParams(location.search).get('note');
+  if (!want) return;
+  if (want === 'create') { startNewNote(); return; }
+  const list = $('noteList');
+  if (list && list.querySelector(`[data-note-id="${CSS.escape(want)}"]`)) await openNote(want);
+  else syncUrl(null);
+}
+
 // ==================== 详细信息（原版 Details 面板）====================
 function renderDetails(note) {
   const created = note?.created || 0;
@@ -169,7 +186,7 @@ function renderDetails(note) {
   const ol = $('noteHistory');
   if (!ol) return;
   ol.innerHTML = '';
-  const hist = (note?.history || []).slice(-10).reverse();
+  const hist = (note?.history || []).slice(-200).reverse();
   if (!hist.length) {
     const li = document.createElement('li');
     li.textContent = '暂无修改记录';
@@ -199,11 +216,12 @@ async function openNote(id, card) {
     status('已解密显示');
     renderAttachments();
     markActive();
+    syncUrl(activeNote.id);
     resetIdle();
   } catch (e) { status(e.message, true); alert(e.message); }
 }
 
-$('btnNewNote').onclick = () => {
+function startNewNote() {
   activeNote = { id: null, rawKey: null, attachments: [] };
   $('noteTitle').value = '';
   $('noteBody').value = '';
@@ -211,8 +229,11 @@ $('btnNewNote').onclick = () => {
   status('新笔记：保存后生成独立文件密钥');
   renderAttachments();
   markActive();
+  syncUrl('create');
   resetIdle();
-};
+}
+
+$('btnNewNote').onclick = startNewNote;
 
 // ==================== 保存 / 删除 ====================
 $('btnSaveNote').onclick = async () => {
@@ -237,7 +258,8 @@ $('btnSaveNote').onclick = async () => {
     activeNote.id = r.note_id;
     activeNote.created = activeNote.created || r.updated;
     activeNote.updated = r.updated;
-    activeNote.history = [...(activeNote.history || []), r.updated].slice(-10);
+    activeNote.history = [...(activeNote.history || []), r.updated].slice(-200);
+    syncUrl(activeNote.id);
     renderDetails(activeNote);
     status(`已保存 ${new Date().toLocaleTimeString()}`);
     await loadList();
@@ -259,6 +281,7 @@ $('btnDeleteNote').onclick = async () => {
     if ($('noteDeletePass')) $('noteDeletePass').value = '';
     renderDetails(null);
     renderAttachments();
+    syncUrl(null);
     status('笔记已删除');
     await loadList();
   } catch (e) { status(e.message, true); alert(e.message); }
