@@ -34,11 +34,16 @@ async function api(path, { method = 'GET', body } = {}) {
 }
 
 // 敏感操作前的二次口令校验（服务端记录 3 分钟窗口）
-async function requireVerify(scope) {
+// 页面上若提供了行内口令输入框（与原版一致），优先使用；为空时退回浏览器 prompt
+async function requireVerify(scope, pass = '') {
   const label = scope === 'notes' ? '笔记密码' : '访问密码';
-  const pass = window.prompt(`请输入${label}以继续：`);
-  if (!pass) throw new Error('已取消');
-  await api('verify', { method: 'POST', body: { scope, hash: await loginHash(pass, scope === 'notes' ? 'note' : 'login', authSalt) } });
+  let given = String(pass || '');
+  if (!given) {
+    const typed = window.prompt(`请输入${label}以继续：`);
+    if (!typed) throw new Error('已取消');
+    given = typed;
+  }
+  await api('verify', { method: 'POST', body: { scope, hash: await loginHash(given, scope === 'notes' ? 'note' : 'login', authSalt) } });
 }
 
 // ---- 状态胶囊 / 视图 ----
@@ -268,13 +273,14 @@ async function refreshFiles() {
   const names = await Promise.all(files.map(decodeFileName));
   files.forEach((f, i) => {
     const safeName = escapeHtml(names[i]);
+    const size = fmtSize(f.size || 0);
     const tr = document.createElement('tr');
     tr.className = 'border-b border-cyan-900/30 align-middle';
     tr.innerHTML = `
       <td class="file-name-cell py-4 pr-4 text-cyan-100/85"><span class="file-name-text" title="${safeName}">${safeName}</span></td>
-      <td class="py-4 pr-4 text-cyan-100/70">${fmtSize(f.size || 0)}</td>
       <td class="py-4 text-right">
         <div class="inline-actions justify-end">
+          <input type="password" autocomplete="off" data-pass="${escapeHtml(f.id)}" placeholder="访问密码" class="download-password-field secure-entry">
           <button type="button" data-dl="${escapeHtml(f.id)}" class="btn-neon px-4 py-2">解密下载</button>
           <button type="button" data-del="${escapeHtml(f.id)}" class="btn-danger px-4 py-2">删除</button>
         </div>
@@ -288,20 +294,33 @@ async function refreshFiles() {
         <div>
           <p class="section-title">Encrypted File</p>
           <div class="mt-2 text-sm font-medium text-cyan-100"><span class="file-name-text" title="${safeName}">${safeName}</span></div>
-          <div class="mt-2 text-xs text-cyan-100/55">${fmtSize(f.size || 0)}</div>
+          <div class="mt-2 text-xs text-cyan-100/55">${size}</div>
         </div>
-        <div class="flex gap-2">
-          <button type="button" data-dl="${escapeHtml(f.id)}" class="btn-neon flex-1">解密下载</button>
-          <button type="button" data-del="${escapeHtml(f.id)}" class="btn-danger flex-1">删除</button>
+        <div class="download-form">
+          <input type="password" autocomplete="off" data-pass="${escapeHtml(f.id)}" placeholder="输入访问密码" class="download-password-field secure-entry w-full">
+          <div class="flex gap-2">
+            <button type="button" data-dl="${escapeHtml(f.id)}" class="btn-neon flex-1">解密下载</button>
+            <button type="button" data-del="${escapeHtml(f.id)}" class="btn-danger flex-1">删除</button>
+          </div>
         </div>
       </div>`;
     mobile.appendChild(card);
   });
 }
 
-async function downloadFile(id) {
+// 读取被点击按钮所在行 / 卡片内的口令输入框（桌面表格与移动端卡片各自独立）
+function rowPass(btn, id) {
+  const box = btn ? btn.closest('tr, .file-card') : null;
+  const el = box ? box.querySelector('[data-pass]') : null;
+  if (el) return el.value;
+  const fallback = document.querySelector(`[data-pass="${String(id)}"]`);
+  return fallback ? fallback.value : '';
+}
+
+async function downloadFile(id, btn) {
+  const pass = rowPass(btn, id);
   try {
-    await requireVerify('vault');
+    await requireVerify('vault', pass);
     const d = await api(`download/${id}`);
     const ct = new Uint8Array(await (await fetch(d.url)).arrayBuffer());
     const rawKey = await unwrapKeyWithPriv(privKey, d.wrapped_key);
@@ -317,10 +336,11 @@ async function downloadFile(id) {
   } catch (e) { alert(e.message); }
 }
 
-async function deleteFile(id) {
+async function deleteFile(id, btn) {
+  const pass = rowPass(btn, id);
   if (!window.confirm('确认删除该文件？（不可恢复）')) return;
   try {
-    await requireVerify('vault');
+    await requireVerify('vault', pass);
     await api(`files/delete/${id}`, { method: 'POST' });
     await refreshFiles();
   } catch (e) { alert(e.message); }
@@ -329,23 +349,25 @@ async function deleteFile(id) {
 $('fileRows').onclick = e => {
   const dl = e.target.closest('[data-dl]');
   const del = e.target.closest('[data-del]');
-  if (dl) downloadFile(dl.dataset.dl);
-  if (del) deleteFile(del.dataset.del);
+  if (dl) downloadFile(dl.dataset.dl, dl);
+  if (del) deleteFile(del.dataset.del, del);
 };
 $('filesMobile').onclick = e => {
   const dl = e.target.closest('[data-dl]');
   const del = e.target.closest('[data-del]');
-  if (dl) downloadFile(dl.dataset.dl);
-  if (del) deleteFile(del.dataset.del);
+  if (dl) downloadFile(dl.dataset.dl, dl);
+  if (del) deleteFile(del.dataset.del, del);
 };
 
 $('btnUpload').onclick = () => $('fileInput').click();
 $('fileInput').onchange = async e => {
+  // 公钥只需要取一次，避免每个文件重复请求 keyinfo
+  let pub = null;
+  try { pub = (await api('keyinfo')).user.pub; } catch (err) { alert(`读取公钥失败：${err.message}`); return; }
   for (const file of e.target.files) {
     try {
       const rawKey = newRawKey();
-      const { user } = await api('keyinfo');
-      const wrappedKey = await wrapKeyWithPub(user.pub, rawKey);
+      const wrappedKey = await wrapKeyWithPub(pub, rawKey);
       const cipher = await fileEncrypt(rawKey, new Uint8Array(await file.arrayBuffer()));
       const meta = { size: cipher.byteLength, name_enc: await encryptText(rawKey, file.name), wrapped_key: wrappedKey };
       const { id, upload_url } = await api('upload/meta', { method: 'POST', body: meta });

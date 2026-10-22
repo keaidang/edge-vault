@@ -86,14 +86,37 @@
                                 <div class="content-scroll pr-1">
                                     <div class="space-y-4">
                                         <div class="stack-form">
-                                            <input type="text" id="noteTitle" maxlength="120" placeholder="笔记标题（加密存储）" class="field">
+                                            <input type="text" id="noteTitle" maxlength="120" placeholder="笔记标题" class="field">
                                             <textarea id="noteBody" placeholder="输入加密笔记内容" class="textarea-field" style="min-height:280px"></textarea>
-                                            <div class="inline-actions">
-                                                <button type="button" id="btnSaveNote" class="btn-neon orbitron">保存笔记</button>
-                                                <button type="button" id="btnDeleteNote" class="btn-danger">删除笔记</button>
-                                                <span id="noteStatus" class="text-sm text-cyan-100/60"></span>
-                                            </div>
+                                            <button type="button" id="btnSaveNote" class="btn-neon orbitron">保存笔记</button>
                                         </div>
+
+                                        <div class="stack-form">
+                                            <input type="password" id="noteDeletePass" autocomplete="off" placeholder="输入笔记密码后删除" class="download-password-field secure-entry">
+                                            <button type="button" id="btnDeleteNote" class="btn-danger">删除笔记</button>
+                                        </div>
+
+                                        <p id="noteStatus" class="text-sm text-cyan-100/60"></p>
+
+                                        <details class="admin-dropdown" id="noteDetails">
+                                            <summary class="admin-toggle">
+                                                <div class="text-left">
+                                                    <p class="section-title">Details</p>
+                                                    <h3 class="mt-2 text-base font-semibold text-cyan-200">详细信息</h3>
+                                                </div>
+                                                <span class="admin-toggle-icon text-xl text-cyan-300">⌄</span>
+                                            </summary>
+                                            <div class="admin-content space-y-4">
+                                                <div class="info-card text-sm leading-7 text-cyan-100/80">
+                                                    <div>创建时间：<span id="noteCreated">--</span> (UTC+8)</div>
+                                                    <div>最后修改：<span id="noteUpdated">--</span> (UTC+8)</div>
+                                                </div>
+                                                <div class="info-card">
+                                                    <p class="section-title">Modification History</p>
+                                                    <ol id="noteHistory" class="history-list mt-3"></ol>
+                                                </div>
+                                            </div>
+                                        </details>
 
                                         <div class="space-y-4">
                                             <div class="flex items-end justify-between gap-4">

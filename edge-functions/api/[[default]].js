@@ -417,7 +417,7 @@ export async function onRequest(context) {
         ok: true,
         initialized: !!st.initialized,
         destroyed: !!st.destroyed,
-        overdue: !!sess && !st.destroyed && isOverdue(st),
+        overdue: isOverdue(st),
         last_checkin: st.last_checkin || 0,
         checkin_timeout_hours: st.checkin_timeout_hours || 72,
         auth_salt: st.auth_salt || '',
@@ -759,9 +759,13 @@ export async function onRequest(context) {
     if (path === 'files' && method === 'GET') {
       if (!isVault) return err('需要保险库会话', 403);
       const files = [];
+      const now = nowSec();
       for (const name of await listAllKeys(state_kv, fileKeyPrefix(sess.user))) {
         const m = await state_kv.get(name, 'json');
-        if (m && m.status === 'ready') files.push(m);
+        if (!m) continue;
+        if (m.status === 'ready') { files.push(m); continue; }
+        // 中断的上传（关页 / 断网）不会写 upload/done，超过 1 小时清掉，避免 KV 残留
+        if (now - (m.created || 0) > 3600) await state_kv.delete(name);
       }
       files.sort((a, b2) => b2.created - a.created);
       return json({ ok: true, files, usage: await getUsage() });
@@ -823,12 +827,17 @@ export async function onRequest(context) {
         wrapped_key: b.wrapped_key || existing?.wrapped_key || '',
         attachments: Array.isArray(b.attachments) ? b.attachments : (existing?.attachments || []),
         created: existing?.created || now, updated: now,
+        // 原版「详细信息 → Modification History」：只保留最近 10 次修改时间戳
+        history: [...(existing?.history || []), now].slice(-10),
       };
       await state_kv.put(key, JSON.stringify(note));
       const index = (await state_kv.get(notesIndexKey(sess.user), 'json')) || [];
       const item = index.find(n => n.id === id) || { id, created: note.created };
       item.updated = now;
       item.attachments = note.attachments.length;
+      // 索引里保留标题密文与包裹密钥，笔记列表才能在浏览器内解密出标题（与原版「笔记菜单显示标题」一致）
+      item.title_enc = note.title_enc || '';
+      item.wrapped_key = note.wrapped_key || '';
       if (!index.some(n => n.id === id)) index.unshift(item);
       index.sort((a, b2) => b2.updated - a.updated);
       await state_kv.put(notesIndexKey(sess.user), JSON.stringify(index));
@@ -868,6 +877,8 @@ export async function onRequest(context) {
 
     if (path === 'notes/att/meta' && method === 'POST') {
       if (!isNotes) return err('需要笔记会话', 403);
+      // 与其他笔记端点一致：上传附件前也必须通过二次笔记口令校验
+      if (!verified(sess, 'notes')) return err('请先重新验证笔记密码', 428);
       const b = await body(request);
       const noteId = safeId(b.note_id);
       const note = noteId ? await state_kv.get(`${noteKeyPrefix(sess.user)}${noteId}`, 'json') : null;

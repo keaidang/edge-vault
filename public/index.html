@@ -56,7 +56,7 @@
                             <h2 class="orbitron text-2xl text-red-300 md:text-3xl">系统已永久锁定</h2>
                             <p class="mx-auto max-w-xl text-sm leading-7 text-red-100/70 md:text-base">私钥和加密数据已执行销毁流程。你可以重置系统重新初始化，但无法恢复已销毁内容。</p>
                         </div>
-                        <button type="button" id="btnResetSystem" class="btn-neon orbitron w-full md:w-auto md:px-8 mt-8">重置系统并重新初始化</button>
+                        <button type="button" id="btnResetSystem" class="btn-neon orbitron w-full md:w-auto md:px-8 mt-8">重新初始化系统</button>
                     </div>
                 </div>
 
@@ -130,7 +130,7 @@
                                 <div class="admin-content space-y-5">
                                     <div class="space-y-3">
                                         <p class="section-title">User Keyring</p>
-                                        <select id="adminUserTarget" class="field">
+                                        <select id="adminUserTarget" class="select-field">
                                             <option value="user1">user1</option>
                                             <option value="user2">user2</option>
                                             <option value="user3">user3</option>
@@ -138,13 +138,13 @@
                                         </select>
                                         <input type="password" id="adminUserPass" autocomplete="new-password" placeholder="设置该槽位登录密码（至少 12 位）" class="field secure-entry">
                                         <input type="password" id="adminUserPass2" autocomplete="new-password" placeholder="再次输入该槽位密码" class="field secure-entry">
-                                        <button type="button" id="btnManageUser" class="btn-neon w-full">创建 / 重置用户密钥</button>
+                                        <button type="button" id="btnManageUser" class="btn-neon w-full">更新用户密钥</button>
                                         <p class="text-xs leading-5 text-cyan-100/45">已有加密文件的槽位禁止重置密钥（服务端返回 409）。</p>
                                     </div>
 
                                     <div class="space-y-3">
                                         <p class="section-title">Aegis Notes</p>
-                                        <select id="adminNoteTarget" class="field">
+                                        <select id="adminNoteTarget" class="select-field">
                                             <option value="user1">user1</option>
                                             <option value="user2">user2</option>
                                             <option value="user3">user3</option>
@@ -153,17 +153,17 @@
                                         <input type="password" id="adminNotePass" autocomplete="new-password" placeholder="设置笔记独立密码（至少 12 位）" class="field secure-entry">
                                         <input type="password" id="adminNotePass2" autocomplete="new-password" placeholder="再次输入笔记密码" class="field secure-entry">
                                         <div class="grid gap-2 md:grid-cols-2">
-                                            <button type="button" id="btnEnableNotes" class="btn-neon w-full">启用笔记</button>
-                                            <button type="button" id="btnDisableNotes" class="btn-danger w-full">关闭笔记</button>
+                                            <button type="button" id="btnEnableNotes" class="btn-neon w-full">启用神盾笔记</button>
+                                            <button type="button" id="btnDisableNotes" class="btn-danger w-full">关闭神盾笔记</button>
                                         </div>
                                     </div>
 
                                     <div class="space-y-3">
                                         <p class="section-title">Protocol Codes</p>
                                         <input type="text" id="adminCheckinCode" autocomplete="off" placeholder="新的签到确认码" class="field secure-entry">
-                                        <button type="button" id="btnUpdateCheckin" class="btn-neon w-full">更新签到码</button>
+                                        <button type="button" id="btnUpdateCheckin" class="btn-neon w-full">更新签到协议</button>
                                         <input type="text" id="adminDuressCode" autocomplete="off" placeholder="新的胁迫销毁码" class="field secure-entry">
-                                        <button type="button" id="btnUpdateDuress" class="btn-neon w-full">更新胁迫码</button>
+                                        <button type="button" id="btnUpdateDuress" class="btn-danger w-full">更新胁迫协议</button>
                                     </div>
 
                                     <div class="dense-form">
@@ -195,13 +195,11 @@
                             <table id="filesTable" class="desktop-table files-table mt-2 w-full text-left text-sm">
                                 <colgroup>
                                     <col>
-                                    <col style="width: 110px;">
-                                    <col style="width: 330px;">
+                                    <col style="width: 440px;">
                                 </colgroup>
                                 <thead>
                                     <tr class="border-b border-cyan-900/70 text-cyan-600">
                                         <th class="pb-3 font-medium">文件名</th>
-                                        <th class="pb-3 font-medium">大小</th>
                                         <th class="pb-3 text-right font-medium">操作</th>
                                     </tr>
                                 </thead>
