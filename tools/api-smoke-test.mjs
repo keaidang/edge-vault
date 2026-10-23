@@ -167,15 +167,21 @@ check('state 回传 verified=true（3 分钟窗口内免重复验证）', r.data
 r = await call(`download/${fileId}`, { cookie: u1.cookie });
 check('验证后可下载（返回预签名 URL）', /X-Amz-Signature/.test(r.data.url || ''), (r.data.url || '').slice(0, 40));
 
-// 会话滑动空闲过期（服务端兜底）：把 last_seen 拨回 31 分钟前，应视为失效
+// 会话滑动空闲过期（服务端兜底 10 分钟）：改 last_seen 观察 5 分钟仍有效、11 分钟失效
 r = await call('login', { method: 'POST', body: { hash: 'H_ADMIN' } });
 const idleCookie = sessionOf(r);
 const idleKey = `sess:${idleCookie.split('=')[1]}`;
-const idleSess = JSON.parse(globalThis.session_kv.map.get(idleKey));
-idleSess.seen = Math.floor(Date.now() / 1000) - 31 * 60;
-globalThis.session_kv.map.set(idleKey, JSON.stringify(idleSess));
+const setSeenMinutesAgo = mins => {
+  const s = JSON.parse(globalThis.session_kv.map.get(idleKey));
+  s.seen = Math.floor(Date.now() / 1000) - mins * 60;
+  globalThis.session_kv.map.set(idleKey, JSON.stringify(s));
+};
+setSeenMinutesAgo(5);
 r = await call('files', { cookie: idleCookie });
-check('会话空转超 30 分钟 → 服务端失效（401）', r.status === 401, `HTTP ${r.status}`);
+check('会话空转 5 分钟 → 仍有效（200）', r.status === 200, `HTTP ${r.status}`);
+setSeenMinutesAgo(11);
+r = await call('files', { cookie: idleCookie });
+check('会话空转超 10 分钟 → 服务端失效（401）', r.status === 401, `HTTP ${r.status}`);
 
 // 笔记：admin 为用户启用笔记（独立密钥 + 独立口令）
 r = await call('manage/notes', {

@@ -57,8 +57,8 @@ function status(msg, bad = false) {
 
 // ---- 空闲自动锁定 ----
 // 旧实现：60 秒无操作即 lock()，且 lock() 里还会 api('logout') 把笔记会话一起删掉；
-// 现在放宽到 15 分钟，切后台不计时，锁定只清本地内存密钥（会话保留，输密码即可继续）。
-const IDLE_LOCK_SEC = 900;
+// 现在放宽到 5 分钟，切后台不计时，锁定只清本地内存密钥（会话保留，输密码即可继续）。
+const IDLE_LOCK_SEC = 300;
 let idleDeadline = 0;
 const idleLeft = () => Math.max(0, Math.ceil((idleDeadline - Date.now()) / 1000));
 function renderIdle(v) {

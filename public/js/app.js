@@ -95,7 +95,7 @@ function showView(name) {
 // ---- 空闲锁定 ----
 // 旧实现：60 秒无操作 → api('logout') + location.reload()，服务端会话被删、整页刷新，
 // 于是「切到别的窗口看一眼 / 挑上传文件 / 填长表单」回来就是登录页。改为本地锁定。
-const IDLE_LOCK_SEC = 900;       // 15 分钟无操作才锁定（原版 60s 过于激进）
+const IDLE_LOCK_SEC = 300;       // 5 分钟无操作即本地锁定
 let idleDeadline = 0;
 let idleSubmitting = false;
 const idleLeft = () => Math.max(0, Math.ceil((idleDeadline - Date.now()) / 1000));

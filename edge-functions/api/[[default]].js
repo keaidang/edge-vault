@@ -17,8 +17,8 @@ const nowSec = () => Math.floor(Date.now() / 1000);
 
 const SESSION_TTL = 12 * 3600;
 // 会话滑动空闲上限：超过该时长没有任何 API 活动即作废（等价于原版「空闲即登出」的服务端兜底）。
-// 必须大于前端的本地锁定阈值（900s），否则会出现「前端还开着、服务端已过期」的割裂状态导致 401。
-const SESSION_IDLE_SEC = 30 * 60;
+// 必须大于前端的本地锁定阈值（300s），否则会出现「前端还开着、服务端已过期」的割裂状态导致 401。
+const SESSION_IDLE_SEC = 10 * 60;
 const SESSION_SEEN_REFRESH_SEC = 120;        // last_seen 刷新节流，避免每个请求都写 KV
 const DEFAULT_QUOTA = 1024 * 1024 * 1024;   // 原版 MAX_VAULT_SIZE_MB=1024
 const MAX_UPLOAD_BYTES = 64 * 1024 * 1024;   // 原版 MAX_UPLOAD_SIZE_MB=64
