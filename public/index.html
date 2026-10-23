@@ -22,7 +22,7 @@
                     <span id="status-pill" class="status-pill border-yellow-500/30 bg-yellow-500/10 text-yellow-200 hidden">● 待初始化</span>
                     <span id="status-pill-running" class="status-pill text-emerald-300 hidden">● 隧道运行中</span>
                     <span id="status-pill-destroyed" class="status-pill border-red-500/30 bg-red-500/10 text-red-300 hidden">● 系统已自毁</span>
-                    <span id="idle-countdown" class="status-pill idle-pill hidden">60s</span>
+                    <span id="idle-countdown" class="status-pill idle-pill hidden">900s</span>
                     <span id="user-pill" class="status-pill hidden">ADMIN</span>
                 </div>
             </div>
@@ -90,6 +90,7 @@
                                 <p class="mt-3 text-sm leading-6 text-cyan-100/60">输入账号密码进入保险库；使用笔记密码登录会自动进入神盾笔记。</p>
                             </div>
                             <div class="stack-form">
+                                <p id="loginHint" class="hidden text-sm leading-6 text-amber-200/80"></p>
                                 <input type="password" id="loginPass" required autocomplete="current-password" placeholder="输入系统密码" class="field secure-entry">
                                 <button type="button" id="btnLogin" class="btn-neon orbitron w-full">进入系统</button>
                                 <button type="button" id="btnForgot" class="btn-ghost orbitron w-full">忘记密码？重置系统（清空全部数据）</button>

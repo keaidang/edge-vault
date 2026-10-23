@@ -10,6 +10,11 @@ let users = [];
 let session = null;      // { user, mode, csrf }
 let privKey = null;      // 仅内存
 let resetToken = '';
+// 服务端二次口令校验窗口 180s；本地提前 10s 失效，避免踩边界
+const VERIFY_CLIENT_MS = 170 * 1000;
+const verifiedUntil = { vault: 0, notes: 0 };
+const isVerified = scope => Date.now() < (verifiedUntil[scope] || 0);
+const clearVerified = () => { verifiedUntil.vault = 0; verifiedUntil.notes = 0; };
 
 const nowSec = () => Math.floor(Date.now() / 1000);
 const fmtSize = n => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : n < 1073741824 ? `${(n / 1048576).toFixed(1)} MB` : `${(n / 1073741824).toFixed(2)} GB`;
@@ -33,9 +38,10 @@ async function api(path, { method = 'GET', body } = {}) {
   return data;
 }
 
-// 敏感操作前的二次口令校验（服务端记录 3 分钟窗口）
+// 敏感操作前的二次口令校验（服务端记录 3 分钟窗口，窗口内不重复索要）
 // 页面上若提供了行内口令输入框（与原版一致），优先使用；为空时退回浏览器 prompt
 async function requireVerify(scope, pass = '') {
+  if (isVerified(scope)) return;                  // 窗口内已验过，直接放行
   const label = scope === 'notes' ? '笔记密码' : '访问密码';
   let given = String(pass || '');
   if (!given) {
@@ -44,6 +50,19 @@ async function requireVerify(scope, pass = '') {
     given = typed;
   }
   await api('verify', { method: 'POST', body: { scope, hash: await loginHash(given, scope === 'notes' ? 'note' : 'login', authSalt) } });
+  verifiedUntil[scope] = Date.now() + VERIFY_CLIENT_MS;
+}
+// 包一层：万一服务端窗口已过（428）或 KV 读到了旧会话，自动重新验证并重试一次
+async function withVerify(scope, fn, pass = '') {
+  await requireVerify(scope, pass);
+  try {
+    return await fn();
+  } catch (e) {
+    if (e.status !== 428) throw e;
+    verifiedUntil[scope] = 0;
+    await requireVerify(scope, pass);
+    return await fn();
+  }
 }
 
 // ---- 状态胶囊 / 视图 ----
@@ -73,9 +92,13 @@ function showView(name) {
   show('admin-controls', authed && session?.user === 'admin');
 }
 
-// ---- 60s 空闲登出 ----
-let idleRemaining = 60;
+// ---- 空闲锁定 ----
+// 旧实现：60 秒无操作 → api('logout') + location.reload()，服务端会话被删、整页刷新，
+// 于是「切到别的窗口看一眼 / 挑上传文件 / 填长表单」回来就是登录页。改为本地锁定。
+const IDLE_LOCK_SEC = 900;       // 15 分钟无操作才锁定（原版 60s 过于激进）
+let idleDeadline = 0;
 let idleSubmitting = false;
+const idleLeft = () => Math.max(0, Math.ceil((idleDeadline - Date.now()) / 1000));
 function renderIdle(v) {
   const el = $('idle-countdown');
   if (!el) return;
@@ -84,8 +107,24 @@ function renderIdle(v) {
 }
 function resetIdle() {
   if (idleSubmitting) return;
-  idleRemaining = 60;
-  renderIdle(idleRemaining);
+  idleDeadline = Date.now() + IDLE_LOCK_SEC * 1000;
+  renderIdle(IDLE_LOCK_SEC);
+}
+// 本地锁定：只清内存私钥与已解密内容，服务端会话保留、页面不刷新；重新输密码即可继续
+function lockVault(reason = 'idle') {
+  privKey = null; csrf = ''; session = null;
+  clearVerified();
+  for (const id of ['fileRows', 'filesMobile']) { const el = $(id); if (el) el.innerHTML = ''; }
+  if ($('loginPass')) $('loginPass').value = '';
+  showView('view-login');
+  const hint = $('loginHint');
+  if (hint) {
+    hint.textContent = reason === 'idle'
+      ? `已因 ${Math.round(IDLE_LOCK_SEC / 60)} 分钟无操作自动锁定，输入密码即可继续（会话仍然有效）。`
+      : '';
+    show('loginHint', !!hint.textContent);
+  }
+  console.info('[edge-vault] 已锁定：', reason);
 }
 async function doLogout() {
   if (idleSubmitting) return;
@@ -95,18 +134,17 @@ async function doLogout() {
   location.reload();
 }
 setInterval(() => {
-  if (!privKey) return;
-  idleRemaining -= 1;
-  renderIdle(idleRemaining);
-  if (idleRemaining <= 0) doLogout();
+  if (!privKey || document.hidden) return;       // 切后台/别的窗口时不计时
+  const left = idleLeft();
+  renderIdle(left);
+  if (left <= 0) lockVault('idle');
 }, 1000);
-['pointerdown', 'pointermove', 'keydown', 'scroll', 'touchstart', 'click'].forEach(e => window.addEventListener(e, resetIdle, { passive: true }));
-window.addEventListener('keydown', e => {
-  const k = String(e.key || '').toLowerCase();
-  if (k === 'f5' || (k === 'r' && (e.ctrlKey || e.metaKey))) {
-    if (privKey) { e.preventDefault(); doLogout(); }
-  }
+// 回到页面时按真实经过时间判断，离开久了才锁
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden || !privKey) return;
+  if (idleLeft() <= 0) lockVault('idle'); else renderIdle(idleLeft());
 });
+['pointerdown', 'pointermove', 'keydown', 'scroll', 'touchstart', 'click'].forEach(e => window.addEventListener(e, resetIdle, { passive: true }));
 
 // ---- 自毁倒计时 ----
 let countdownTimer = null;
@@ -131,13 +169,27 @@ async function boot() {
   authSalt = st.auth_salt || '';
   users = st.users || [];
   if (st.session) { session = st.session; csrf = st.session.csrf; }
+  if (st.verified) {
+    // 服务端只说「是否仍在窗口内」，本地保守按 100s 计，过期后由 withVerify 兜底重验
+    const now = Date.now();
+    verifiedUntil.vault = st.verified.vault ? now + 100 * 1000 : 0;
+    verifiedUntil.notes = st.verified.notes ? now + 100 * 1000 : 0;
+  }
   if (st.destroyed) { pill('status-pill-destroyed'); showView('view-destroyed'); return; }
   if (!st.initialized) { pill('status-pill'); showView('view-init'); return; }
   pill('status-pill-running');
   startCountdown(st.last_checkin, st.checkin_timeout_hours);
   renderQuota(st.quota, st.usage);
-  // 私钥不落存储：每次进入都要求重新输入口令
+  // 私钥不落存储：每次进入都要求重新输入口令（但会话还在，输密码即可，不必重新初始化）
   showView('view-login');
+  const hint = $('loginHint');
+  if (hint && st.session) {
+    hint.textContent = `服务端会话仍然有效（${String(st.session.user || '').toUpperCase()} / ${st.session.mode}），输入密码解锁即可。`;
+    show('loginHint', true);
+  } else if (hint) {
+    hint.textContent = '';
+    show('loginHint', false);
+  }
 }
 
 function showBootError(e) {
@@ -214,6 +266,9 @@ $('btnLogin').onclick = async () => {
     const r = await api('login', { method: 'POST', body: { hash: await loginHash(pass, 'login', authSalt) } });
     csrf = r.csrf;
     session = { user: r.user, mode: r.mode, csrf: r.csrf };
+    clearVerified();   // 新会话没有二次校验时间戳
+    const hint = $('loginHint');
+    if (hint) { hint.textContent = ''; show('loginHint', false); }
     if (r.mode === 'notes') { location.href = '/notes.html'; return; }   // 笔记口令 → 笔记页
     const info = await api('keyinfo');
     privKey = await unwrapPrivateKey(info.user.wrapped, pass);
@@ -320,8 +375,7 @@ function rowPass(btn, id) {
 async function downloadFile(id, btn) {
   const pass = rowPass(btn, id);
   try {
-    await requireVerify('vault', pass);
-    const d = await api(`download/${id}`);
+    const d = await withVerify('vault', () => api(`download/${id}`), pass);
     const ct = new Uint8Array(await (await fetch(d.url)).arrayBuffer());
     const rawKey = await unwrapKeyWithPriv(privKey, d.wrapped_key);
     const plain = await fileDecrypt(rawKey, ct);
@@ -340,8 +394,7 @@ async function deleteFile(id, btn) {
   const pass = rowPass(btn, id);
   if (!window.confirm('确认删除该文件？（不可恢复）')) return;
   try {
-    await requireVerify('vault', pass);
-    await api(`files/delete/${id}`, { method: 'POST' });
+    await withVerify('vault', () => api(`files/delete/${id}`, { method: 'POST' }), pass);
     await refreshFiles();
   } catch (e) { alert(e.message); }
 }
@@ -474,8 +527,7 @@ $('btnSaveQuota').onclick = async () => {
 $('btnDestroy').onclick = async () => {
   if (!window.confirm('立即销毁全部密钥与密文？此操作不可恢复。')) return;
   try {
-    await requireVerify('vault');
-    await api('destroy', { method: 'POST' });
+    await withVerify('vault', () => api('destroy', { method: 'POST' }));
     alert('销毁完成');
     location.reload();
   } catch (e) { alert(e.message); }

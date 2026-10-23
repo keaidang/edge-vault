@@ -31,8 +31,12 @@ async function api(path, { method = 'GET', body } = {}) {
   return data;
 }
 
-// 笔记页所有读写都要求 3 分钟内的笔记口令验证；页面上有行内口令框时优先使用
+// 笔记页所有读写都要求 3 分钟内的笔记口令验证；窗口内不重复索要，页面上有行内口令框时优先使用
+const VERIFY_CLIENT_MS = 170 * 1000;   // 服务端 180s，本地提前 10s 失效
+let verifiedUntilNotes = 0;
+const isVerifiedNotes = () => Date.now() < verifiedUntilNotes;
 async function requireVerify(pass = '') {
+  if (isVerifiedNotes()) return;
   let given = String(pass || '');
   if (!given) {
     const typed = window.prompt('请输入笔记密码以继续：');
@@ -40,6 +44,7 @@ async function requireVerify(pass = '') {
     given = typed;
   }
   await api('verify', { method: 'POST', body: { scope: 'notes', hash: await loginHash(given, 'note', authSalt) } });
+  verifiedUntilNotes = Date.now() + VERIFY_CLIENT_MS;
 }
 
 function status(msg, bad = false) {
@@ -50,42 +55,49 @@ function status(msg, bad = false) {
   el.classList.toggle('text-cyan-100/60', !bad);
 }
 
-// ---- 空闲自动锁定（与原版一致：60 秒）----
-let idleRemaining = 60;
+// ---- 空闲自动锁定 ----
+// 旧实现：60 秒无操作即 lock()，且 lock() 里还会 api('logout') 把笔记会话一起删掉；
+// 现在放宽到 15 分钟，切后台不计时，锁定只清本地内存密钥（会话保留，输密码即可继续）。
+const IDLE_LOCK_SEC = 900;
+let idleDeadline = 0;
+const idleLeft = () => Math.max(0, Math.ceil((idleDeadline - Date.now()) / 1000));
 function renderIdle(v) {
   const el = $('idle-countdown');
   if (!el) return;
   el.textContent = `${String(Math.max(0, v)).padStart(2, '0')}s`;
   el.classList.toggle('is-warning', v <= 10);
 }
-function lock() {
+function lock({ keepSession = false } = {}) {
   unlocked = false;
   notePrivKey = null;
+  verifiedUntilNotes = 0;
   activeNote = { id: null, rawKey: null, attachments: [] };
   $('noteBody').value = '';
   $('noteTitle').value = '';
   show('notes-main', false);
   show('notes-gate', true);
   status('');
-  api('logout', { method: 'POST' }).catch(() => {});
-  csrf = '';
+  if (!keepSession) {
+    api('logout', { method: 'POST' }).catch(() => {});
+    csrf = '';
+  }
 }
 function resetIdle() {
   if (!unlocked) return;
-  idleRemaining = 60;
-  renderIdle(idleRemaining);
+  idleDeadline = Date.now() + IDLE_LOCK_SEC * 1000;
+  renderIdle(IDLE_LOCK_SEC);
 }
 setInterval(() => {
-  if (!unlocked) return;
-  idleRemaining -= 1;
-  renderIdle(idleRemaining);
-  if (idleRemaining <= 0) lock();
+  if (!unlocked || document.hidden) return;      // 切后台/别的窗口时不计时
+  const left = idleLeft();
+  renderIdle(left);
+  if (left <= 0) lock({ keepSession: true });
 }, 1000);
-['pointerdown', 'pointermove', 'keydown', 'scroll', 'touchstart', 'click'].forEach(e => window.addEventListener(e, resetIdle, { passive: true }));
-window.addEventListener('keydown', e => {
-  const k = String(e.key || '').toLowerCase();
-  if ((k === 'f5' || (k === 'r' && (e.ctrlKey || e.metaKey))) && unlocked) { e.preventDefault(); lock(); }
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden || !unlocked) return;
+  if (idleLeft() <= 0) lock({ keepSession: true }); else renderIdle(idleLeft());
 });
+['pointerdown', 'pointermove', 'keydown', 'scroll', 'touchstart', 'click'].forEach(e => window.addEventListener(e, resetIdle, { passive: true }));
 
 // ==================== 解锁（笔记密码 → 笔记会话）====================
 $('btnNotesUnlock').onclick = async () => {
@@ -430,6 +442,7 @@ async function boot() {
     return;
   }
   // 会话即使存在也不保留私钥：每次进入笔记页都需重新输入笔记密码
+  verifiedUntilNotes = st.verified && st.verified.notes ? Date.now() + 100 * 1000 : 0;
   show('notes-gate', true);
   show('notes-main', false);
 }

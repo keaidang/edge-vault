@@ -108,6 +108,11 @@ check('未登录重复 init 被拒绝（403）', r.status === 403, `HTTP ${r.sta
 r = await call('login', { method: 'POST', body: { hash: 'H_ADMIN' } });
 check('admin 登录 → vault 模式并下发 csrf', r.data.mode === 'vault' && !!r.data.csrf, JSON.stringify(r.data));
 const adminSess = { cookie: sessionOf(r), csrf: r.data.csrf };
+// 会话 Cookie 必须是 Lax（Strict 会在从外部链接/新标签进入时被浏览器丢弃 → 已登录却要求重新登录）
+check('会话 Cookie 为 SameSite=Lax 且 HttpOnly', /SameSite=Lax/i.test(r.setCookie) && /HttpOnly/i.test(r.setCookie) && !/SameSite=Strict/i.test(r.setCookie), r.setCookie.replace(/ev_session=[^;]+/, 'ev_session=***'));
+// 刚登录尚未二次验证
+r = await call('state', { cookie: adminSess.cookie });
+check('state 回传 verified 状态（登录后 vault=false）', r.data.verified && r.data.verified.vault === false, JSON.stringify(r.data.verified));
 
 // CSRF
 r = await call('manage/user', { method: 'POST', cookie: adminSess.cookie, body: { target_user: 'user1' } });
@@ -156,6 +161,9 @@ r = await call('verify', { method: 'POST', cookie: u1.cookie, csrf: u1.csrf, bod
 check('verify 错误口令 → 401', r.status === 401, `HTTP ${r.status}`);
 r = await call('verify', { method: 'POST', cookie: u1.cookie, csrf: u1.csrf, body: { scope: 'vault', hash: 'H_USER1' } });
 check('verify 正确口令 → 200', r.data.ok === true, JSON.stringify(r.data));
+// 二次校验窗口内应回传 vault=true，前端据此避免每次都弹口令
+r = await call('state', { cookie: u1.cookie });
+check('state 回传 verified=true（3 分钟窗口内免重复验证）', r.data.verified && r.data.verified.vault === true, JSON.stringify(r.data.verified));
 r = await call(`download/${fileId}`, { cookie: u1.cookie });
 check('验证后可下载（返回预签名 URL）', /X-Amz-Signature/.test(r.data.url || ''), (r.data.url || '').slice(0, 40));
 

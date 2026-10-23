@@ -184,7 +184,10 @@ async function createSession(request, env, { user, mode, csrf }) {
   const now = nowSec();
   const sess = { user, mode, csrf, iat: now, exp: now + SESSION_TTL, fp: await fingerprint(request, env) };
   await session_kv.put(`sess:${token}`, JSON.stringify(sess));
-  return { token, sess, cookie: `ev_session=${token}; Max-Age=${SESSION_TTL}; Path=/; Secure; HttpOnly; SameSite=Strict` };
+  // SameSite=Strict 会在从外部链接/新标签进入时丢弃 Cookie，导致「已登录却要重新登录」；
+  // 会话本身有 CSRF 双保险，Lax 足够。Secure 只在 HTTPS 下下发，避免 http 调试时 Cookie 被浏览器直接丢弃。
+  const secure = new URL(request.url).protocol === 'https:' ? ' Secure;' : '';
+  return { token, sess, cookie: `ev_session=${token}; Max-Age=${SESSION_TTL}; Path=/;${secure} HttpOnly; SameSite=Lax` };
 }
 
 async function getSession(request, env) {
@@ -425,6 +428,9 @@ export async function onRequest(context) {
         quota: await getStorageConfig(),
         usage: await getUsage(),
         session: sess ? { user: sess.user, mode: sess.mode, csrf: sess.csrf } : null,
+        // 把「二次口令校验是否还在 3 分钟窗口内」告诉前端，避免每次操作都弹出重新验证
+        verified: sess ? { vault: verified(sess, 'vault'), notes: verified(sess, 'notes') } : null,
+        verify_window_sec: VERIFY_WINDOW_SEC,
       });
     }
 
