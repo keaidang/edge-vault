@@ -16,6 +16,10 @@ const safeId = v => String(v ?? '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64);
 const nowSec = () => Math.floor(Date.now() / 1000);
 
 const SESSION_TTL = 12 * 3600;
+// 会话滑动空闲上限：超过该时长没有任何 API 活动即作废（等价于原版「空闲即登出」的服务端兜底）。
+// 必须大于前端的本地锁定阈值（900s），否则会出现「前端还开着、服务端已过期」的割裂状态导致 401。
+const SESSION_IDLE_SEC = 30 * 60;
+const SESSION_SEEN_REFRESH_SEC = 120;        // last_seen 刷新节流，避免每个请求都写 KV
 const DEFAULT_QUOTA = 1024 * 1024 * 1024;   // 原版 MAX_VAULT_SIZE_MB=1024
 const MAX_UPLOAD_BYTES = 64 * 1024 * 1024;   // 原版 MAX_UPLOAD_SIZE_MB=64
 const MIN_PASSWORD_LEN = 12;
@@ -182,7 +186,7 @@ async function fingerprint(request, env) {
 async function createSession(request, env, { user, mode, csrf }) {
   const token = randId(32) + randId(32);
   const now = nowSec();
-  const sess = { user, mode, csrf, iat: now, exp: now + SESSION_TTL, fp: await fingerprint(request, env) };
+  const sess = { user, mode, csrf, iat: now, seen: now, exp: now + SESSION_TTL, fp: await fingerprint(request, env) };
   await session_kv.put(`sess:${token}`, JSON.stringify(sess));
   // SameSite=Strict 会在从外部链接/新标签进入时丢弃 Cookie，导致「已登录却要重新登录」；
   // 会话本身有 CSRF 双保险，Lax 足够。Secure 只在 HTTPS 下下发，避免 http 调试时 Cookie 被浏览器直接丢弃。
@@ -194,10 +198,24 @@ async function getSession(request, env) {
   const token = parseCookie(request).ev_session;
   if (!token) return null;
   const sess = await session_kv.get(`sess:${token}`, 'json');
-  if (!sess || sess.exp < nowSec()) return null;
+  if (!sess) return null;
+  const now = nowSec();
+  if (sess.exp < now) return null;
+  // 滑动空闲过期：补住「Cookie 被拷走后在 12h TTL 内一直可用」的口子（前端 15 分钟本地锁定，服务端 30 分钟兜底）
+  if (now - (sess.seen || sess.iat || 0) > SESSION_IDLE_SEC) {
+    await session_kv.delete(`sess:${token}`);
+    return null;
+  }
   if (!timingSafeEq(sess.fp || '', await fingerprint(request, env))) {
     await session_kv.delete(`sess:${token}`);
     return null;
+  }
+  // 节流刷新 last_seen：最多每 2 分钟写一次 KV（KV 无原子操作，写冲突最多让 verify 时间戳回退一次，代价是重验）
+  if (now - (sess.seen || 0) >= SESSION_SEEN_REFRESH_SEC) {
+    sess.seen = now;
+    await session_kv.put(`sess:${token}`, JSON.stringify(sess));
+  } else {
+    sess.seen = sess.seen || now;
   }
   return { ...sess, token };
 }
